@@ -1,0 +1,45 @@
+<additional>
+    <!-- Bus Stops  -->
+    <busStop id="busStop1" lane="-73352745#7_1" startPos="50" endPos="90" friendlyPos="true" />
+    <busStop id="busStop2" lane="-73352745#7_1" startPos="150" endPos="190" friendlyPos="true"/>
+
+    <!-- Crossings for Pedestrians to Access the Bus Stop -->
+    <crossing id="cross_1" edges="-73352745#7" pos="55" width="3" allow="pedestrian"/>
+    <crossing id="cross_2" edges="-73352745#7" pos="160" width="3" allow="pedestrian"/>
+
+
+    <!-- Inductive loop e1_8 -->
+    <inductionLoop 
+        id="e1_8" 
+        lane="11967800#1_1" 
+        pos="12.99" 
+        period="300.00"
+        file="detectors.out" />
+
+    <!-- Inductive loop e1_9 -->
+    <inductionLoop 
+        id="e1_9" 
+        lane="11967800#1_0" 
+        pos="12.33" 
+        period="300.00"
+        file="detectors.out" />
+
+    <!-- Inductive loop e1_11 -->
+    <inductionLoop 
+        id="e1_11" 
+        lane="-11967800#3_0" 
+        pos="93.88" 
+        period="300.00"
+        file="detectors.out" />
+
+    <!-- Inductive loop e1_10 -->
+    <inductionLoop 
+        id="e1_10" 
+        lane="-11967800#3_1" 
+        pos="93.23" 
+        period="300.00"
+        file="detectors.out" />
+
+
+
+</additional>

@@ -1,0 +1,63 @@
+<routes>
+    <!-- Vehicle Types -->
+    
+    <vType id="bus" accel="0.8" decel="4.5" sigma="0.5" length="12" maxSpeed="50"
+    color="green" vClass="bus" lcStrategic="1" lcCooperative="1" lcSpeedGain="1" lcKeepRight="1">
+    <param key="has.device.gps" value="true"/>
+    <param key="device.gps.precision" value="2.5"/> <!-- noise in meters -->
+    </vType>
+
+    <vType id="taxi" accel="1.0" decel="4.5" sigma="0.5" length="4.5" maxSpeed="60" color="yellow" vClass="taxi" guiShape="taxi"/>
+    <vType id="car" accel="1.2" decel="4.5" sigma="0.5" length="5.0" maxSpeed="60" color="red" vClass="passenger" guiShape="passenger"/>
+    <vType id="truck" accel="0.6" decel="3.5" sigma="0.5" length="10.0" maxSpeed="50" color="blue" vClass="truck" guiShape="truck"/>
+    <vType id="pedestrian" length="0.5" minGap="0.2" accel="2.0" decel="2.0" speedFactor="1.0" color="magenta" vClass="pedestrian"/>
+
+    <!-- Bypass Route for Buses Only -->
+    <route id="bypass_2" edges="-73352745#7 -73352745#4 -73352745#3 -73352745#1 -73352745#0 -7653560#2 -7653560#1 -7653560#0 4806124#0 4806124#1 10513069#1 10513069#2 -7398438#4 -7398438#3 -7398438#2 -7398438#1 -7398438#0"/>
+
+    <!-- Main Highway Route  -->
+    <route id="main_highway" edges="-10513069#7 -10513069#6 -10513069#5 -10513069#4 -10513069#2 -10513069#1 -10513069#0 -4806124#0 -11967800#4 -11967800#3 -11967800#1 -11967800#0 11967800#0 11967800#1 11967800#3 11967800#4 4806124#0 4806124#1 10513069#1 10513069#2 10513069#4 10513069#5 10513069#6 10513069#7"/>
+
+    <!-- Truck-Only Bypass Route -->
+    <route id="truck_bypass" edges="-7403682#1 -7403682#0 -7403680#1 -7403680#0 -11967800#1 -11012659#4 -11012659#3 11012661 11012664#2 11012664#3 11012663#1"/>
+
+    <!-- Flows and vehicles  -->
+
+    <!-- Person Flow to Bus Stop (begin=0) -->
+    <personFlow id="pedestrian_walking_to_busStop" begin="0" end="3600" personsPerHour="600">
+        <walk edges="-73352745#7" arrivalPos="50"/>
+        <stop busStop="busStop1" duration="30"/>
+        <ride busStop="busStop2" lines="bus"/>
+        <walk edges="-73352745#7" arrivalPos="200"/>
+    </personFlow>
+    
+    <!-- Define Pedestrian Routes -->
+    <route id="General_flow" edges="-73352745#7"/>
+
+    <!-- Continuous Flow of Pedestrians Walking to the Bus Stop -->
+    <flow id="pedestrian_walking_to_busStop" begin="0" end="3600" personsPerHour="600" 
+          type="pedestrian" route="General_flow"/>
+
+
+    <!-- Bus flow  -->
+    <flow id="bus_bypass_flow" begin="0" end="3600" vehsPerHour="50" type="bus" route="bypass_2" departLane="1" line="bus">
+        <stop busStop="busStop1" duration="15" boarding="true"/>
+        <stop busStop="busStop2" duration="15" boarding="true"/>
+    </flow>
+
+    <flow id="bus2" begin="0" end="3600" vehsPerHour="500" type="bus" route="truck_bypass" departLane="free" line="bus"/>
+
+
+    <!-- General Traffic flow  -->
+    <flow id="taxi_highway_flow" begin="0" end="3600" vehsPerHour="50" type="taxi" route="main_highway" departLane="1"/>
+    <flow id="car_highway_flow" begin="0" end="3600" vehsPerHour="50" type="car" route="main_highway" departLane="1"/>
+
+    <!-- Trucks flow -->
+    <flow id="truck_bypass_flow" begin="0" end="3600" vehsPerHour="200" type="truck" route="truck_bypass"/>
+
+    <!-- Person Flow from Bus Stop -->
+    <personFlow id="pedestrian_leaving_busStop" begin="5" end="3600" personsPerHour="600">
+        <walk edges="-73352745#7" arrivalPos="200"/>
+    </personFlow>
+</routes>
+    

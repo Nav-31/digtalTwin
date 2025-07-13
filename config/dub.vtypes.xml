@@ -1,0 +1,14 @@
+<additional>
+    <!-- <vType id="bus" vClass="bus" accel="1.2" decel="2.5" length="12.0" maxSpeed="30"/>
+    <vType id="car" vClass="passenger" accel="2.6" decel="4.5" sigma="0.5" length="5.0" maxSpeed="50"/>
+    <vType id="truck" vClass="truck" accel="1.5" decel="3.0" length="10.0" maxSpeed="40"/>
+    <vType id="taxi" vClass="taxi" accel="2.5" decel="4.0" sigma="0.4" length="5.0" maxSpeed="45"/> -->
+
+     <vType id="bus" accel="0.8" decel="4.5" sigma="0.5" length="12" maxSpeed="50"
+       color="green" vClass="bus" lcStrategic="0"/>
+    <vType id="taxi" accel="1.0" decel="4.5" sigma="0.5" length="4.5" maxSpeed="60" color="yellow" vClass="taxi" guiShape="taxi"/>
+    <vType id="car" accel="1.2" decel="4.5" sigma="0.5" length="5.0" maxSpeed="60" color="red" vClass="passenger" guiShape="passenger"/>
+    <vType id="truck" accel="0.6" decel="3.5" sigma="0.5" length="10.0" maxSpeed="50" color="blue" vClass="truck" guiShape="truck"/>
+    <vType id="pedestrian" length="0.5" minGap="0.2" accel="2.0" decel="2.0" speedFactor="1.0" color="magenta" vClass="pedestrian"/>
+
+</additional>

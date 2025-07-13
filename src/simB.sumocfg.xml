@@ -1,0 +1,19 @@
+<configuration>
+    <input>
+        <net-file value="../config/dub.net.xml"/>
+        <additional-files value="../config/dub.add.xml, ../config/dub.vtypes.xml"/>
+
+    </input>
+    <time>
+        <begin value="0"/>
+        <end value="3600"/>
+        <step-length value="0.1"/>
+
+    </time>
+    <report>
+        <no-step-log value="true"/>
+    </report>
+    <processing>
+        <time-to-teleport value="-1"/>
+    </processing>
+</configuration>

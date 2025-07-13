@@ -1,0 +1,15 @@
+<configuration>
+    <!-- Input Files -->
+    <input>
+        <net-file value="../config/dub.net.xml"/>  <!-- Network File -->
+        <route-files value="../config/dub.rou.xml"/>  <!-- Route File -->
+        <additional-files value="../config/dub.add.xml"/> <!-- Additional File -->
+    </input>
+
+    <!-- Simulation Settings -->
+    <time>
+        <begin value="0"/>  <!-- Start time -->
+        <end value="3600"/>  <!-- End time (1 hour) -->
+        <step-length value="0.1"/>
+    </time>
+</configuration>

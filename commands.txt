@@ -1,0 +1,58 @@
+netconvert --osm-files dublin.osm --output-file dub.net.xml --geometry.remove --roundabouts.guess --ramps.guess --junctions.join --tls.guess-signals --tls.join --tls.default-type actuated --speed-in-kmh --ignore-errors --osm.bike-lanes --remove-edges.by-vclass pedestrian,rail_urban,rail --verbose
+
+
+#Manual Run
+sumo-gui -n dub.net.xml -r dub.rou.xml -a dub.add.xml
+
+#TraCI Run
+sumo-gui -c dub.sumocfg.xml --remote-port 8813
+sumo-gui -c dub.sumocfg.xml --remote-port 8814
+
+
+python traci_sumo.py
+
+python traci_speed --save --output speeds.csv --interval 0.001
+
+
+python traci_loc_speed.py --save --output speeds_loc.csv --interval 0.001
+
+python traci_loc_speed_tls_trip.py --save --output TripLogs --interval 0.001
+
+
+MIRROR:
+sumo-gui -c dub.sumocfg.xml --remote-port 8813
+
+python traci_loc_speed_tls_trip.py --config dub.sumocfg.xml --save --output logs --interval 0.001
+
+sumo-gui -c simB.sumocfg.xml --remote-port 8814
+
+python mirror_sim_gps.py --configA dub.sumocfg.xml --configB simB.sumocfg.xml --portA 8813 --portB 8814 --steps 1000 --interval 0.5
+
+python Lowgps.py --configA dub.sumocfg.xml --configB simB.sumocfg.xml --portA 8813 --portB 8814 --steps 1000 --interval 0.5
+
+python gpssumomodel.py --configA dub.sumocfg.xml --configB simB.sumocfg.xml --portA 8813 --portB 8814 --steps 1000 --interval 0.5
+
+
+
+
+
+
+
+bus route:
+ <route id="triq" edges="-10513069#7 -10513069#6 -10513069#5 -10513069#4 -10513069#2 -10513069#0 -11967800#4 -11967800#1 -11967800#0 11967800#0 11967800#1 11967800#3 4806124#0 10513069#1 10513069#4 10513069#5 10513069#6 10513069#7"/>
+
+
+_0 is bus lane
+
+_1 is normal lane
+
+
+
+BYPASS TRUCK 
+ <route id="bypass_truck" edges="-7403682#1 -7403680#2 -11967800#1 -11012659#5 -11012659#2 -11012659#0 11012655#3 11012664#2 11012663#1"/>
+    
+GENERAL TRAFFIC 2:
+<route id="gtrfc_2" edges="9391418#0 25840028#0 25840028#2 25840028#3 7398438#3 -10513069#2 -10513069#0 7653560#0 7653560#2 73352745#0 73352745#1 73352745#3 73352745#4 73352745#5 73352745#6 73352745#7"/>
+
+MAIN HIGHWAY
+    <route id="triq" edges="-10513069#7 -10513069#6 -10513069#5 -10513069#4 -10513069#2 -10513069#0 -11967800#4 -11967800#1 -11967800#0 11967800#0 11967800#1 11967800#3 4806124#0 10513069#1 10513069#4 10513069#5 10513069#6 10513069#7"/>
