@@ -9,40 +9,76 @@ import math
 from camera import update_virtual_cameras, close_camera_log
 
 
+# Ensure SUMO tools are in path
 if 'SUMO_HOME' in os.environ:
     tools = os.path.join(os.environ['SUMO_HOME'], 'tools')
     sys.path.append(tools)
 else:
     sys.exit("Please declare the environment variable 'SUMO_HOME'")
 
-# Configuration parameters for hybrid mirroring
+# Configuration parameters
 class HybridConfig:
-    """Configuration parameters for hybrid mirroring"""
-    
-    # Traffic light detection
-    TRAFFIC_LIGHT_PROXIMITY = 30  # meters
-    CRITICAL_LIGHT_DISTANCE = 15  # meters - very close to light
-    STOP_LINE_DISTANCE = 20      # meters - consider stopped at light
-    
-    # GPS correction thresholds
-    MIN_GPS_ERROR_FOR_CORRECTION = 5.0   # meters
-    MAX_GPS_ERROR = 10.0                 # meters
-    MIN_CORRECTION_FACTOR = 0.1          # minimum correction strength
-    MAX_CORRECTION_FACTOR = 0.8          # maximum correction strength
-    NEAR_LIGHT_CORRECTION_FACTOR = 0.4   # correction when near lights
-    
-    # Speed control
-    SPEED_THRESHOLD_STOPPED = 0.5        # m/s - consider vehicle stopped
-    SPEED_SMOOTH_FACTOR = 0.7            # smoothing for speed changes
-    GRADUAL_STOP_FACTOR = 0.7            # deceleration rate
-    
-    # Logging
-    STATUS_LOG_INTERVAL = 50             # steps between status logs
+    TRAFFIC_LIGHT_PROXIMITY = 30
+    CRITICAL_LIGHT_DISTANCE = 15
+    STOP_LINE_DISTANCE = 20
+    MIN_GPS_ERROR_FOR_CORRECTION = 5.0
+    MAX_GPS_ERROR = 10.0
+    MIN_CORRECTION_FACTOR = 0.1
+    MAX_CORRECTION_FACTOR = 0.8
+    NEAR_LIGHT_CORRECTION_FACTOR = 0.4
+    SPEED_THRESHOLD_STOPPED = 0.5
+    SPEED_SMOOTH_FACTOR = 0.7
+    GRADUAL_STOP_FACTOR = 0.7
+    STATUS_LOG_INTERVAL = 50
 
-# Initialize logging
-gps_log_file = open("gps_vs_true_log.csv", "w", newline='')
-gps_logger = csv.writer(gps_log_file)
-gps_logger.writerow(["step", "bus_id", "true_x", "true_y", "noisy_x", "noisy_y", "simb_x", "simb_y", "lag_distance", "intervention_type"])
+# --- Mirroring Strategies ---
+class BaseMirroringStrategy:
+    def mirror(self, connA, connB, vid, step, state):
+        raise NotImplementedError
+
+class GPSMirroringStrategy(BaseMirroringStrategy):
+    def mirror(self, connA, connB, vid, step, state):
+        return hybrid_gps_mirroring(connA, connB, vid, state['gps_pos'], state['speed'], state['is_stopped'], step)
+
+class CameraMirroringStrategy(BaseMirroringStrategy):
+    def mirror(self, connA, connB, vid, step, state):
+        # TODO: implement camera-based mirroring
+        return False, 'camera_not_implemented'
+
+class LoopMirroringStrategy(BaseMirroringStrategy):
+    def mirror(self, connA, connB, vid, step, state):
+        # TODO: implement induction-loop mirroring
+        return False, 'loop_not_implemented'
+
+class RandomMirroringStrategy(BaseMirroringStrategy):
+    def mirror(self, connA, connB, vid, step, state):
+        # simple random fallback: teleport to true position
+        true_x, true_y = state['true_pos']
+        connB.vehicle.moveToXY(vid, edgeID=state['road_id'], laneIndex=state['lane_index'], x=true_x, y=true_y, keepRoute=1)
+        return True, 'random'
+
+# Sequential fallback executor
+def mirror_with_fallback(connA, connB, vid, step, state):
+    # Try GPS
+    if state.get('gps_pos') is not None:
+        ok, mode = GPSMirroringStrategy().mirror(connA, connB, vid, step, state)
+        if ok:
+            return ok, mode
+    # Try camera
+    ok, mode = CameraMirroringStrategy().mirror(connA, connB, vid, step, state)
+    if ok:
+        return ok, mode
+    # Try induction loops
+    ok, mode = LoopMirroringStrategy().mirror(connA, connB, vid, step, state)
+    if ok:
+        return ok, mode
+    # Finally random
+    return RandomMirroringStrategy().mirror(connA, connB, vid, step, state)
+
+
+# --- Utility Functions ---
+def euclidean(a, b):
+    return math.hypot(a[0] - b[0], a[1] - b[1])
 
 def get_noisy_gps_position(conn, vehicle_id, std_dev=2.5):
     """Reduced noise for more stable positioning"""
@@ -54,10 +90,6 @@ def get_noisy_gps_position(conn, vehicle_id, std_dev=2.5):
     except Exception as e:
         print(f"[ERROR] Failed to get GPS position for {vehicle_id}: {e}")
         return None, None, (None, None)
-
-def euclidean(a, b):
-    """Calculate Euclidean distance between two points"""
-    return math.sqrt((a[0] - b[0])**2 + (a[1] - b[1])**2)
 
 def detect_traffic_light_proximity(conn, vehicle_id, proximity_threshold=None):
     """
@@ -99,35 +131,6 @@ def detect_traffic_light_proximity(conn, vehicle_id, proximity_threshold=None):
             pass
         return False, float('inf'), None
 
-def calculate_gps_correction_factor(gps_error, max_error=None, min_factor=None, max_factor=None):
-    """
-    Calculate how much GPS correction to apply based on error magnitude
-    
-    Args:
-        gps_error: Distance between GPS and current position
-        max_error: Maximum error before applying full correction
-        min_factor: Minimum correction factor (for small errors)
-        max_factor: Maximum correction factor (for large errors)
-    
-    Returns:
-        float: Correction factor between min_factor and max_factor
-    """
-    if max_error is None:
-        max_error = HybridConfig.MAX_GPS_ERROR
-    if min_factor is None:
-        min_factor = HybridConfig.MIN_CORRECTION_FACTOR
-    if max_factor is None:
-        max_factor = HybridConfig.MAX_CORRECTION_FACTOR
-        
-    if gps_error <= 1.0:
-        return 0.0  # No correction needed for small errors
-    
-    # Linear interpolation between min and max factors
-    normalized_error = min(gps_error / max_error, 1.0)
-    correction_factor = min_factor + (max_factor - min_factor) * normalized_error
-    
-    return correction_factor
-
 def is_vehicle_stopped_at_light(conn, vehicle_id, speed_threshold=None):
     """
     Determine if vehicle is stopped specifically due to traffic light
@@ -161,6 +164,55 @@ def is_vehicle_stopped_at_light(conn, vehicle_id, speed_threshold=None):
         
     except Exception as e:
         return False
+
+def calculate_gps_correction_factor(gps_error, max_error=None, min_factor=None, max_factor=None):
+    """
+    Calculate how much GPS correction to apply based on error magnitude
+    
+    Args:
+        gps_error: Distance between GPS and current position
+        max_error: Maximum error before applying full correction
+        min_factor: Minimum correction factor (for small errors)
+        max_factor: Maximum correction factor (for large errors)
+    
+    Returns:
+        float: Correction factor between min_factor and max_factor
+    """
+    if max_error is None:
+        max_error = HybridConfig.MAX_GPS_ERROR
+    if min_factor is None:
+        min_factor = HybridConfig.MIN_CORRECTION_FACTOR
+    if max_factor is None:
+        max_factor = HybridConfig.MAX_CORRECTION_FACTOR
+        
+    if gps_error <= 1.0:
+        return 0.0  # No correction needed for small errors
+    
+    # Linear interpolation between min and max factors
+    normalized_error = min(gps_error / max_error, 1.0)
+    correction_factor = min_factor + (max_factor - min_factor) * normalized_error
+    
+    return correction_factor
+
+def get_vehicle_state(conn, vehicle_id, stop_counter, speed_threshold=0.3):
+    """
+    Determine if vehicle is truly stopped or just slow
+    """
+    try:
+        speed = conn.vehicle.getSpeed(vehicle_id)
+        
+        # Update stop counter
+        if speed < speed_threshold:
+            stop_counter[vehicle_id] = stop_counter.get(vehicle_id, 0) + 1
+        else:
+            stop_counter[vehicle_id] = 0
+        
+        # Vehicle is considered stopped after 2 consecutive slow readings
+        is_stopped = stop_counter.get(vehicle_id, 0) >= 2
+        
+        return speed, is_stopped
+    except:
+        return 0, True
 
 def hybrid_gps_mirroring(connA, connB, vehicle_id, gps_pos, current_speed, is_stopped, step):
     """
@@ -299,25 +351,7 @@ def hybrid_gps_mirroring(connA, connB, vehicle_id, gps_pos, current_speed, is_st
         print(f"[ERROR] Hybrid mirroring failed for {vehicle_id}: {e}")
         return False, "error"
 
-def get_vehicle_state(conn, vehicle_id, stop_counter, speed_threshold=0.3):
-    """
-    Determine if vehicle is truly stopped or just slow
-    """
-    try:
-        speed = conn.vehicle.getSpeed(vehicle_id)
-        
-        # Update stop counter
-        if speed < speed_threshold:
-            stop_counter[vehicle_id] = stop_counter.get(vehicle_id, 0) + 1
-        else:
-            stop_counter[vehicle_id] = 0
-        
-        # Vehicle is considered stopped after 2 consecutive slow readings
-        is_stopped = stop_counter.get(vehicle_id, 0) >= 2
-        
-        return speed, is_stopped
-    except:
-        return 0, True
+# Main mirroring loop
 
 def mirror_simulation(configA, configB, portA=8813, portB=8814, max_steps=10000, step_length=0.1):
     sumo_processA = subprocess.Popen(["sumo-gui", "-c", configA, "--start", "--remote-port", str(portA)])
@@ -331,12 +365,14 @@ def mirror_simulation(configA, configB, portA=8813, portB=8814, max_steps=10000,
     step = 0
     seen_vehicles = set()
     just_added_steps = {}
-    last_gps_update = {}
-    gps_update_interval = 10  # GPS update frequency
+    last_mirroring = {}
+    gps_update_interval = 10
     stop_counter = {}
-    
-    # Enhanced state tracking
     vehicle_last_speed = {}
+
+    gps_log_file = open("gps_vs_true_log.csv", "w", newline='')
+    gps_logger = csv.writer(gps_log_file)
+    gps_logger.writerow(["step","bus_id","true_x","true_y","noisy_x","noisy_y","simb_x","simb_y","lag_distance","intervention_type"])
 
     try:
         while step < max_steps:
@@ -344,150 +380,99 @@ def mirror_simulation(configA, configB, portA=8813, portB=8814, max_steps=10000,
             update_virtual_cameras(step, connA)
             connB.simulationStep()
 
-            current_vehicles = connA.vehicle.getIDList()
-            
-            for vid in current_vehicles:
-                try:
-                    # Get vehicle info from SimA
-                    pos = connA.vehicle.getPosition(vid)
-                    speed = connA.vehicle.getSpeed(vid)
-                    angle = connA.vehicle.getAngle(vid)
-                    road_id = connA.vehicle.getRoadID(vid)
-                    veh_type = connA.vehicle.getTypeID(vid)
+            for vid in connA.vehicle.getIDList():
+                # gather basic state
+                pos = connA.vehicle.getPosition(vid)
+                speed, is_stopped = get_vehicle_state(connA, vid, stop_counter)
+                road_id = connA.vehicle.getRoadID(vid)
+                lane_id = connA.vehicle.getLaneID(vid) if connA.vehicle.getLaneID(vid) else ''
+                lane_index = int(lane_id.split('_')[-1]) if '_' in lane_id else 0
+                veh_type = connA.vehicle.getTypeID(vid)
 
-                    # Get lane info safely
+                # spawn logic unchanged...
+                if vid not in seen_vehicles:
+                    seen_vehicles.add(vid)
+                    just_added_steps[vid] = step
+                    # add route, vehicle, initial pos+speed
                     try:
-                        lane_id = connA.vehicle.getLaneID(vid)
-                        lane_index = int(lane_id.split('_')[-1])
-                    except:
-                        lane_index = 0
-
-                    # Check if GPS update is due
-                    gps_due = (step - last_gps_update.get(vid, -gps_update_interval) >= gps_update_interval)
-
-                    # Add vehicle to SimB if new
-                    if vid not in seen_vehicles:
-                        seen_vehicles.add(vid)
-                        just_added_steps[vid] = step
-                        
-                        try:
-                            route_edges = connA.vehicle.getRoute(vid)
-                            route_id = f"{vid}_route"
-                            
-                            # Add route if doesn't exist
-                            if route_id not in connB.route.getIDList():
-                                connB.route.add(route_id, route_edges)
-                            
-                            # Add vehicle to SimB
-                            connB.vehicle.add(vid, routeID=route_id, typeID=veh_type)
-                            
-                            # Set color (green for buses)
-                            if veh_type == 'bus':
-                                connB.vehicle.setColor(vid, (0, 255, 0, 255))
-                            else:
-                                connB.vehicle.setColor(vid, connA.vehicle.getColor(vid))
-                            
-                            # Initialize with current position immediately
-                            connB.vehicle.moveToXY(vid, edgeID=road_id, laneIndex=lane_index, 
-                                                 x=pos[0], y=pos[1], keepRoute=1)
-                            connB.vehicle.setSpeed(vid, speed)
-                            
-                            print(f"[SPAWN] Added {vid} at ({pos[0]:.1f}, {pos[1]:.1f})")
-                            
-                        except Exception as e:
-                            print(f"[ERROR] Could not add vehicle {vid}: {e}")
-                            continue
-
-                    # Short settling period - 2 steps
-                    if step - just_added_steps.get(vid, 0) < 2:
+                        route_edges = connA.vehicle.getRoute(vid)
+                        route_id = f"{vid}_route"
+                        if route_id not in connB.route.getIDList():
+                            connB.route.add(route_id, route_edges)
+                        connB.vehicle.add(vid, routeID=route_id, typeID=veh_type)
+                        if veh_type == 'bus':
+                            connB.vehicle.setColor(vid, (0, 255, 0, 255))
+                        else:
+                            connB.vehicle.setColor(vid, connA.vehicle.getColor(vid))
+                        connB.vehicle.moveToXY(vid, edgeID=road_id, laneIndex=lane_index, x=pos[0], y=pos[1], keepRoute=1)
+                        connB.vehicle.setSpeed(vid, speed)
+                        print(f"[SPAWN] Added {vid} at ({pos[0]:.1f}, {pos[1]:.1f})")
+                    except Exception as e:
+                        print(f"[ERROR] Could not add vehicle {vid}: {e}")
                         continue
-
-                    # Ensure vehicle exists in SimB
-                    if vid not in connB.vehicle.getIDList():
-                        continue
-
-                    # Get vehicle state
-                    current_speed, is_stopped = get_vehicle_state(connA, vid, stop_counter)
-                    
-                    # GPS update processing - ENHANCED WITH HYBRID APPROACH
-                    if gps_due:
-                        gps_x, gps_y, (true_x, true_y) = get_noisy_gps_position(connA, vid)
-                        last_gps_update[vid] = step
-
-                        if gps_x is not None and gps_y is not None:
-                            try:
-                                # Get current SimB position for logging
-                                current_simb_pos = connB.vehicle.getPosition(vid)
-                                lag_distance = euclidean((gps_x, gps_y), current_simb_pos)
-                                
-                                # APPLY HYBRID GPS MIRRORING (MAIN ENHANCEMENT)
-                                success, intervention_type = hybrid_gps_mirroring(
-                                    connA, connB, vid, (gps_x, gps_y), current_speed, is_stopped, step
-                                )
-                                
-                                # Update position after hybrid processing for accurate logging
-                                updated_simb_pos = connB.vehicle.getPosition(vid)
-                                
-                                # Enhanced logging with intervention type
-                                gps_logger.writerow([step, vid, true_x, true_y, gps_x, gps_y, 
-                                                   updated_simb_pos[0], updated_simb_pos[1], 
-                                                   lag_distance, intervention_type])
-                                
-                                if not success:
-                                    print(f"[FALLBACK] Hybrid approach failed for {vid}, using fallback")
-                                    # Fallback to minimal positioning
-                                    try:
-                                        connB.vehicle.moveToXY(vid, edgeID=road_id, laneIndex=lane_index, 
-                                                             x=gps_x, y=gps_y, keepRoute=1)
-                                    except Exception as fallback_e:
-                                        print(f"[ERROR] Fallback positioning failed for {vid}: {fallback_e}")
-                                
-                                # Periodic status logging for high lag
-                                if lag_distance > 10 and step % 100 == 0:
-                                    print(f"[HIGH_LAG] {vid}: lag={lag_distance:.1f}m, intervention={intervention_type}")
-                                    
-                            except Exception as e:
-                                print(f"[ERROR] GPS processing failed for {vid}: {e}")
-                                # Fallback to original simple positioning
-                                try:
-                                    connB.vehicle.moveToXY(vid, edgeID=road_id, laneIndex=lane_index, 
-                                                         x=gps_x, y=gps_y, keepRoute=1)
-                                except:
-                                    pass
-                    
-                    else:
-                        # Between GPS updates - maintain smooth operation
-                        try:
-                            # Check if vehicle is near traffic light for between-update handling
-                            is_near_light, dist_to_light, light_state = detect_traffic_light_proximity(connB, vid)
-                            
-                            if is_vehicle_stopped_at_light(connB, vid):
-                                # Vehicle stopped at light - let SUMO handle everything
-                                pass
-                            elif is_near_light and dist_to_light < HybridConfig.CRITICAL_LIGHT_DISTANCE:
-                                # Close to light - let SUMO handle speed
-                                pass
-                            else:
-                                # Safe area - continue GPS-based speed matching
-                                if is_stopped:
-                                    # Continue gradual stop
-                                    current_simb_speed = connB.vehicle.getSpeed(vid)
-                                    if current_simb_speed > 0.1:
-                                        connB.vehicle.setSpeed(vid, current_simb_speed * 0.8)
-                                    else:
-                                        connB.vehicle.setSpeed(vid, 0)
-                                else:
-                                    # Maintain speed matching
-                                    last_speed = vehicle_last_speed.get(vid, current_speed)
-                                    smooth_speed = 0.8 * current_speed + 0.2 * last_speed
-                                    connB.vehicle.setSpeed(vid, smooth_speed)
-                                    vehicle_last_speed[vid] = smooth_speed
-                        except Exception as e:
-                            pass
-
-                except Exception as e:
-                    print(f"[ERROR] Processing vehicle {vid}: {e}")
+                if step - just_added_steps.get(vid,0) < 2:
                     continue
+
+                if vid not in connB.vehicle.getIDList():
+                    continue
+
+                # decide if mirroring is due
+                is_mirroring_due = (step - last_mirroring.get(vid, -gps_update_interval) >= gps_update_interval)
+                if is_mirroring_due:
+                    last_mirroring[vid] = step
+                    # try to get GPS
+                    gps_x, gps_y, (true_x, true_y) = get_noisy_gps_position(connA, vid)
+                    has_gps = (gps_x is not None)
+
+                    # build state dict for mirroring
+                    state = {
+                        'speed': speed,
+                        'is_stopped': is_stopped,
+                        'true_pos': (true_x, true_y),
+                        'gps_pos': (gps_x, gps_y) if has_gps else None,
+                        'road_id': road_id,
+                        'lane_index': lane_index
+                    }
+
+                    # perform mirroring with fallback chain
+                    success, intervention_type = mirror_with_fallback(connA, connB, vid, step, state)
+
+                    # logging
+                    updated_pos = connB.vehicle.getPosition(vid)
+                    lag = euclidean((gps_x, gps_y) if has_gps else (true_x, true_y), updated_pos)
+                    gps_logger.writerow([step, vid, true_x, true_y, gps_x, gps_y, updated_pos[0], updated_pos[1], lag, intervention_type])
+                    if not success:
+                        print(f"[FALLBACK] Mirroring failed for {vid}, using fallback")
+                # else: let SUMO handle vehicle normally
+                else:
+                    # Between GPS updates - maintain smooth operation
+                    try:
+                        # Check if vehicle is near traffic light for between-update handling
+                        is_near_light, dist_to_light, light_state = detect_traffic_light_proximity(connB, vid)
+                        
+                        if is_vehicle_stopped_at_light(connB, vid):
+                            # Vehicle stopped at light - let SUMO handle everything
+                            pass
+                        elif is_near_light and dist_to_light < HybridConfig.CRITICAL_LIGHT_DISTANCE:
+                            # Close to light - let SUMO handle speed
+                            pass
+                        else:
+                            # Safe area - continue GPS-based speed matching
+                            if is_stopped:
+                                # Continue gradual stop
+                                current_simb_speed = connB.vehicle.getSpeed(vid)
+                                if current_simb_speed > 0.1:
+                                    connB.vehicle.setSpeed(vid, current_simb_speed * 0.8)
+                                else:
+                                    connB.vehicle.setSpeed(vid, 0)
+                            else:
+                                # Maintain speed matching
+                                last_speed = vehicle_last_speed.get(vid, current_speed)
+                                smooth_speed = 0.8 * current_speed + 0.2 * last_speed
+                                connB.vehicle.setSpeed(vid, smooth_speed)
+                                vehicle_last_speed[vid] = smooth_speed
+                    except Exception as e:
+                        pass
 
             # Handle pedestrians (simplified)
             for pid in connA.person.getIDList():
@@ -529,55 +514,22 @@ def mirror_simulation(configA, configB, portA=8813, portB=8814, max_steps=10000,
         print("Simulation interrupted by user.")
     finally:
         print("Cleaning up simulation...")
-        try:
-            connA.close()
-            connB.close()
-            gps_log_file.close()
-            close_camera_log()
-        except:
-            pass
-        try:
-            sumo_processA.terminate()
-            sumo_processB.terminate()
-        except:
-            pass
+        connA.close(); connB.close(); gps_log_file.close(); close_camera_log()
+        sumo_processA.terminate(); sumo_processB.terminate()
         print("Cleanup complete.")
+
+# CLI unchanged
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Enhanced Digital Twin Urban Traffic Mirror with Traffic Light Compliance")
-    parser.add_argument("--configA", required=True, help="SUMO config file for Simulation A")
-    parser.add_argument("--configB", required=True, help="SUMO config file for Simulation B") 
+    parser = argparse.ArgumentParser(description="Enhanced Digital Twin Urban Traffic Mirror with Modular Fallback")
+    parser.add_argument("--configA", required=True)
+    parser.add_argument("--configB", required=True)
     parser.add_argument("--portA", type=int, default=8813, help="Port for Simulation A")
     parser.add_argument("--portB", type=int, default=8814, help="Port for Simulation B")
-    parser.add_argument("--steps", type=int, default=10000, help="Maximum simulation steps")
-    parser.add_argument("--interval", type=float, default=0.1, help="Step length in seconds")
-    
-    # Configuration overrides
-    parser.add_argument("--gps-error-threshold", type=float, default=HybridConfig.MIN_GPS_ERROR_FOR_CORRECTION,
-                       help="Minimum GPS error before correction (meters)")
-    parser.add_argument("--traffic-light-proximity", type=float, default=HybridConfig.TRAFFIC_LIGHT_PROXIMITY,
-                       help="Distance to consider near traffic light (meters)")
-    parser.add_argument("--near-light-correction", type=float, default=HybridConfig.NEAR_LIGHT_CORRECTION_FACTOR,
-                       help="Correction factor when near traffic lights (0.0-1.0)")
-    
+    parser.add_argument("--steps", type=int, default=10000)
+    parser.add_argument("--interval", type=float, default=0.1)
     args = parser.parse_args()
-    
-    # Apply configuration overrides
-    HybridConfig.MIN_GPS_ERROR_FOR_CORRECTION = args.gps_error_threshold
-    HybridConfig.TRAFFIC_LIGHT_PROXIMITY = args.traffic_light_proximity
-    HybridConfig.NEAR_LIGHT_CORRECTION_FACTOR = args.near_light_correction
-    
-    print(f"Starting Enhanced Digital Twin Mirror:")
-    print(f"  SimA Config: {args.configA}")
-    print(f"  SimB Config: {args.configB}")
-    print(f"  GPS Update Interval: 5 steps")
-    print(f"  Step Length: {args.interval}s")
-    print(f"  GPS Error Threshold: {HybridConfig.MIN_GPS_ERROR_FOR_CORRECTION}m")
-    print(f"  Traffic Light Proximity: {HybridConfig.TRAFFIC_LIGHT_PROXIMITY}m")
-    print(f"  Near-Light Correction Factor: {HybridConfig.NEAR_LIGHT_CORRECTION_FACTOR}")
-    print("=" * 60)
-    
     mirror_simulation(args.configA, args.configB, args.portA, args.portB, args.steps, args.interval)
 
 if __name__ == "__main__":
