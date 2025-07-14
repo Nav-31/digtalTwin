@@ -6,7 +6,7 @@ import traci
 import random
 import csv
 import math
-from camera import update_virtual_cameras, close_camera_log
+from camera import update_virtual_cameras, close_camera_log, CAMERA_CACHE, CAMERAS
 
 
 # Ensure SUMO tools are in path
@@ -15,6 +15,31 @@ if 'SUMO_HOME' in os.environ:
     sys.path.append(tools)
 else:
     sys.exit("Please declare the environment variable 'SUMO_HOME'")
+
+def handle_between_update(connB, vid, state, vehicle_last_speed):
+    """
+    Called when we’re *not* applying an explicit mirror update—either
+    because mirroring isn’t due, or because GPS+camera both declined.
+    This is your old “between GPS updates” speed logic.
+    """
+    try:
+        is_near_light, dist_to_light, light_state = detect_traffic_light_proximity(connB, vid)
+        if is_vehicle_stopped_at_light(connB, vid):
+            return
+        if is_near_light and dist_to_light < HybridConfig.CRITICAL_LIGHT_DISTANCE:
+            return
+
+        # Safe area: smooth speed
+        if state['is_stopped']:
+            cur = connB.vehicle.getSpeed(vid)
+            connB.vehicle.setSpeed(vid, cur * HybridConfig.GRADUAL_STOP_FACTOR if cur>0.1 else 0)
+        else:
+            last = vehicle_last_speed.get(vid, state['speed'])
+            smooth = HybridConfig.SPEED_SMOOTH_FACTOR * state['speed'] + (1 - HybridConfig.SPEED_SMOOTH_FACTOR) * last
+            connB.vehicle.setSpeed(vid, smooth)
+            vehicle_last_speed[vid] = smooth
+    except:
+        pass
 
 # Configuration parameters
 class HybridConfig:
@@ -42,8 +67,33 @@ class GPSMirroringStrategy(BaseMirroringStrategy):
 
 class CameraMirroringStrategy(BaseMirroringStrategy):
     def mirror(self, connA, connB, vid, step, state):
-        # TODO: implement camera-based mirroring
-        return False, 'camera_not_implemented'
+            # look up the last camera detection for this vehicle
+            det = state['camera_cache'].get(vid)
+            if det:
+                det_step, cam_id, speed, lane, angle, noisy_dist = det
+                print(f"[CAMERA] {vid} detected by {cam_id} at step {det_step}: speed={speed}, lane={lane}, angle={angle}, noisy_dist={noisy_dist}")
+                # only use it if it's fresher than the last mirror step
+                if det_step > state['last_mirror_step']:
+                    print(f"[CAMERA-use] step={step} vid={vid} det_step={det_step} angle={angle} dist={noisy_dist}")
+                    cam = CAMERAS[cam_id]
+                    theta = math.radians(angle)
+                    # project the noisy distance along the detected heading
+                    x = cam['x'] + noisy_dist * math.cos(theta)
+                    y = cam['y'] + noisy_dist * math.sin(theta)
+                    # update mirrored vehicle position and speed
+                    connB.vehicle.moveToXY(
+                        vid,
+                        edgeID=state['road_id'],
+                        laneIndex=state['lane_index'],
+                        x=x, y=y,
+                        keepRoute=1
+                    )
+                    print(f"[CAMERA→XY] vid={vid} x={x:.1f}, y={y:.1f}, speed={speed:.1f}")
+                    connB.vehicle.setSpeed(vid, speed)
+                    return True, 'camera_update'
+            # no fresh detection → let SUMO handle it
+            print(f"[CAMERA] no fresh det for vid={vid} at step={step}")
+            return True, 'camera_no_update'
 
 class LoopMirroringStrategy(BaseMirroringStrategy):
     def mirror(self, connA, connB, vid, step, state):
@@ -86,6 +136,7 @@ def get_noisy_gps_position(conn, vehicle_id, std_dev=2.5):
         true_pos = conn.vehicle.getPosition(vehicle_id)
         noisy_x = true_pos[0] + random.gauss(0, std_dev)
         noisy_y = true_pos[1] + random.gauss(0, std_dev)
+        return None, None, true_pos  # Noisy GPS not used in this context
         return noisy_x, noisy_y, true_pos
     except Exception as e:
         print(f"[ERROR] Failed to get GPS position for {vehicle_id}: {e}")
@@ -423,57 +474,35 @@ def mirror_simulation(configA, configB, portA=8813, portB=8814, max_steps=10000,
                     # try to get GPS
                     gps_x, gps_y, (true_x, true_y) = get_noisy_gps_position(connA, vid)
                     has_gps = (gps_x is not None)
-
                     # build state dict for mirroring
+                    print("Camera cache:", CAMERA_CACHE)
                     state = {
                         'speed': speed,
                         'is_stopped': is_stopped,
                         'true_pos': (true_x, true_y),
                         'gps_pos': (gps_x, gps_y) if has_gps else None,
                         'road_id': road_id,
-                        'lane_index': lane_index
+                        'lane_index': lane_index,
+                        'last_mirror_step': last_mirroring[vid],
+                        'camera_cache': CAMERA_CACHE,
                     }
 
                     # perform mirroring with fallback chain
                     success, intervention_type = mirror_with_fallback(connA, connB, vid, step, state)
-
-                    # logging
-                    updated_pos = connB.vehicle.getPosition(vid)
-                    lag = euclidean((gps_x, gps_y) if has_gps else (true_x, true_y), updated_pos)
-                    gps_logger.writerow([step, vid, true_x, true_y, gps_x, gps_y, updated_pos[0], updated_pos[1], lag, intervention_type])
-                    if not success:
-                        print(f"[FALLBACK] Mirroring failed for {vid}, using fallback")
+                    if not success or intervention_type in ('camera_no_data', 'sumo'):
+                            handle_between_update(connB, vid, state, vehicle_last_speed)
+                    else:
+                        # logging
+                        updated_pos = connB.vehicle.getPosition(vid)
+                        lag = euclidean((gps_x, gps_y) if has_gps else (true_x, true_y), updated_pos)
+                        gps_logger.writerow([step, vid, true_x, true_y, gps_x, gps_y, updated_pos[0], updated_pos[1], lag, intervention_type])
+                        if not success:
+                            print(f"[FALLBACK] Mirroring failed for {vid}, using fallback")
                 # else: let SUMO handle vehicle normally
                 else:
                     # Between GPS updates - maintain smooth operation
-                    try:
-                        # Check if vehicle is near traffic light for between-update handling
-                        is_near_light, dist_to_light, light_state = detect_traffic_light_proximity(connB, vid)
-                        
-                        if is_vehicle_stopped_at_light(connB, vid):
-                            # Vehicle stopped at light - let SUMO handle everything
-                            pass
-                        elif is_near_light and dist_to_light < HybridConfig.CRITICAL_LIGHT_DISTANCE:
-                            # Close to light - let SUMO handle speed
-                            pass
-                        else:
-                            # Safe area - continue GPS-based speed matching
-                            if is_stopped:
-                                # Continue gradual stop
-                                current_simb_speed = connB.vehicle.getSpeed(vid)
-                                if current_simb_speed > 0.1:
-                                    connB.vehicle.setSpeed(vid, current_simb_speed * 0.8)
-                                else:
-                                    connB.vehicle.setSpeed(vid, 0)
-                            else:
-                                # Maintain speed matching
-                                last_speed = vehicle_last_speed.get(vid, current_speed)
-                                smooth_speed = 0.8 * current_speed + 0.2 * last_speed
-                                connB.vehicle.setSpeed(vid, smooth_speed)
-                                vehicle_last_speed[vid] = smooth_speed
-                    except Exception as e:
-                        pass
-
+                    handle_between_update(connB, vid, state, vehicle_last_speed)
+        
             # Handle pedestrians (simplified)
             for pid in connA.person.getIDList():
                 try:
