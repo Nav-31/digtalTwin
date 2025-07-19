@@ -7,22 +7,17 @@ import traci
 import random
 import csv
 import math
-import logging #+
+import logging
 
-#+ Import the setup function and the camera components
-from logging_config import setup_logging #+
-from camera import update_virtual_cameras, close_camera_log, CAMERA_CACHE, CAMERAS #+
+from logging_config import setup_logging
+from camera import update_virtual_cameras, close_camera_log, CAMERA_CACHE, CAMERAS
 
-#+ Get a logger instance for this module
 logger = logging.getLogger(__name__)
 
-# Ensure SUMO tools are in path
-if 'SUMO_HOME' in os.environ:
-    tools = os.path.join(os.environ['SUMO_HOME'], 'tools')
-    sys.path.append(tools)
-else:
-    sys.exit("Please declare the environment variable 'SUMO_HOME'")
+# --- All code from the top down to mirror_simulation remains the same ---
+# (handle_between_update, HybridConfig, Mirroring Strategies, utility functions, etc.)
 
+# ... (Paste all previous functions here, from handle_between_update to hybrid_gps_mirroring)
 def handle_between_update(connB, vid, state, vehicle_last_speed):
     """
     Called when we’re *not* applying an explicit mirror update.
@@ -68,8 +63,6 @@ class HybridConfig:
     SPEED_THRESHOLD_STOPPED = 0.5
     SPEED_SMOOTH_FACTOR = 0.7
     GRADUAL_STOP_FACTOR = 0.7
-    #-- STATUS_LOG_INTERVAL is no longer needed, logger handles timestamps
-    # STATUS_LOG_INTERVAL = 50
 
 # --- Mirroring Strategies ---
 class BaseMirroringStrategy:
@@ -84,14 +77,11 @@ class CameraMirroringStrategy(BaseMirroringStrategy):
     def mirror(self, connA, connB, vid, step, state):
         det = state['camera_cache'].get(vid)
         if det:
-            # --- MODIFIED TO UNPACK NEW CACHE FORMAT ---
             det_step, cam_id, speed, noisy_x, noisy_y = det
             
             if det_step >= state['last_mirror_step']:
                 logger.info(f"Using fresh camera detection for {vid} from {cam_id} (detected at step {det_step}).")
                 
-                # --- SIMPLIFIED LOGIC ---
-                # No more complex angle math. Just use the coordinates provided by the sensor.
                 connB.vehicle.moveToXY(
                     vid, edgeID=state['road_id'], laneIndex=state['lane_index'],
                     x=noisy_x, y=noisy_y, keepRoute=1
@@ -111,6 +101,7 @@ class RandomMirroringStrategy(BaseMirroringStrategy):
     def mirror(self, connA, connB, vid, step, state):
         logger.warning(f"All sensors failed for {vid}. Using random fallback (teleport to true position).")
         true_x, true_y = state['true_pos']
+        # Re-enable the move for a true last-resort fallback
         connB.vehicle.moveToXY(vid, edgeID=state['road_id'], laneIndex=state['lane_index'], x=true_x, y=true_y, keepRoute=1)
         return True, 'random_fallback'
 
@@ -118,9 +109,11 @@ class RandomMirroringStrategy(BaseMirroringStrategy):
 def mirror_with_fallback(connA, connB, vid, step, state):
     # Try GPS
     if state.get('gps_pos'):
+        logger.debug(f"Attempting gps mirror for {vid} at step {step}.")
         ok, mode = GPSMirroringStrategy().mirror(connA, connB, vid, step, state)
         if ok: return ok, mode
     # Try camera
+    logger.debug(f"Attempting camera mirror for {vid} at step {step}.")
     ok, mode = CameraMirroringStrategy().mirror(connA, connB, vid, step, state)
     if ok: return ok, mode
     # Try induction loops
@@ -137,15 +130,15 @@ def euclidean(a, b):
 def get_noisy_gps_position(conn, vehicle_id, std_dev=2.5):
     try:
         true_pos = conn.vehicle.getPosition(vehicle_id)
-        # In the original code, this was returning None. Assuming you want noisy GPS.
-        noisy_x = true_pos[0] + random.gauss(0, std_dev)
-        noisy_y = true_pos[1] + random.gauss(0, std_dev)
-        return None, None, true_pos
+        # --- FOR TESTING: To re-enable GPS, comment out the first return and uncomment the second ---
+        return None, None, true_pos # This forces camera fallback
+        # noisy_x = true_pos[0] + random.gauss(0, std_dev)
+        # noisy_y = true_pos[1] + random.gauss(0, std_dev)
+        # return noisy_x, noisy_y, true_pos
     except Exception as e:
         logger.error(f"Failed to get GPS position for {vehicle_id}: {e}")
         return None, None, (None, None)
 
-# ... (detect_traffic_light_proximity, is_vehicle_stopped_at_light, calculate_gps_correction_factor, get_vehicle_state remain mostly the same, but without prints)
 def detect_traffic_light_proximity(conn, vehicle_id, proximity_threshold=None):
     if proximity_threshold is None: proximity_threshold = HybridConfig.TRAFFIC_LIGHT_PROXIMITY
     try:
@@ -219,7 +212,7 @@ def hybrid_gps_mirroring(connA, connB, vehicle_id, gps_pos, current_speed, is_st
         if intervention_needed:
             road_id = connA.vehicle.getRoadID(vehicle_id)
             lane_id = connA.vehicle.getLaneID(vehicle_id)
-            lane_index = int(lane_id.split('_')[-1]) if '_' in lane_id else 0
+            lane_index = int(lane_id.split('_')[-1]) if lane_id and '_' in lane_id else 0
             
             correction_factor = calculate_gps_correction_factor(gps_error)
             if position_intervention == "minimal_correction":
@@ -251,14 +244,13 @@ def hybrid_gps_mirroring(connA, connB, vehicle_id, gps_pos, current_speed, is_st
         return False, "error"
 
 
-# Main mirroring loop
+# --- Main Mirroring Loop (RESTRUCTURED) ---
 def mirror_simulation(configA, configB, portA, portB, max_steps, step_length):
     try:
         sumo_processA = subprocess.Popen(["sumo-gui", "-c", configA, "--start", "--remote-port", str(portA)])
         sumo_processB = subprocess.Popen(["sumo-gui", "-c", configB, "--start", "--remote-port", str(portB)])
         logger.info("Waiting for SUMO GUIs to launch...")
         time.sleep(5)
-
         connA = traci.connect(port=portA)
         connB = traci.connect(port=portB)
         logger.info("Successfully connected to both SUMO simulations.")
@@ -268,21 +260,105 @@ def mirror_simulation(configA, configB, portA, portB, max_steps, step_length):
 
     step = 0
     seen_vehicles = set()
-    just_added_steps = {}
     last_mirroring = {}
-    gps_update_interval = 10 # steps
+    gps_update_interval = 10
     stop_counter = {}
     vehicle_last_speed = {}
 
+    # Setup for data analysis log
     gps_log_file = open("gps_vs_true_log.csv", "w", newline='')
     gps_logger = csv.writer(gps_log_file)
-    gps_logger.writerow(["step","bus_id","true_x","true_y","noisy_x","noisy_y","simb_x","simb_y","lag_distance","intervention_type"])
+    gps_logger.writerow(["step", "bus_id", "true_x", "true_y", "noisy_x", "noisy_y", "simb_x", "simb_y", "lag_distance", "intervention_type"])
 
     try:
         while step < max_steps:
             connA.simulationStep()
             update_virtual_cameras(step, connA)
             connB.simulationStep()
+
+            # --- STEP 1: GATHER ALL SENSOR DETECTIONS ---
+            detected_vehicles_this_step = {}
+            # GPS Scan (prioritized)
+            for vid in connA.vehicle.getIDList():
+                gps_x, gps_y, true_pos = get_noisy_gps_position(connA, vid)
+                if gps_x is not None:
+                    detected_vehicles_this_step[vid] = {
+                        'source': 'gps',
+                        'gps_pos': (gps_x, gps_y),
+                        'true_pos': true_pos
+                    }
+            # Camera Scan (fallback)
+            for vid, det in CAMERA_CACHE.items():
+                if vid not in detected_vehicles_this_step and det[0] == step: # If not seen by GPS and fresh
+                    detected_vehicles_this_step[vid] = {'source': 'camera'}
+
+            # --- STEP 2: PROCESS DETECTED VEHICLES (SPAWN OR UPDATE) ---
+            for vid, data in detected_vehicles_this_step.items():
+                # --- A. SENSOR-TRIGGERED SPAWNING ---
+                if vid not in seen_vehicles:
+                    try:
+                        logger.info(f"FIRST DETECTION: Spawning vehicle {vid} via {data['source']} sensor.")
+                        # Get static info from Sim A for spawning
+                        pos = connA.vehicle.getPosition(vid)
+                        speed = connA.vehicle.getSpeed(vid)
+                        road_id = connA.vehicle.getRoadID(vid)
+                        route_edges = connA.vehicle.getRoute(vid)
+                        route_id = f"{vid}_route"
+                        veh_type = connA.vehicle.getTypeID(vid)
+
+                        connB.route.add(route_id, route_edges)
+                        connB.vehicle.add(vid, routeID=route_id, typeID=veh_type)
+                        # Spawn at the first detected position
+                        connB.vehicle.moveToXY(vid, edgeID=road_id, laneIndex=0, x=pos[0], y=pos[1], keepRoute=1)
+                        connB.vehicle.setSpeed(vid, speed)
+                        
+                        if veh_type == 'bus':
+                            connB.vehicle.setColor(vid, (0, 255, 0, 255))
+                        else:
+                            connB.vehicle.setColor(vid, connA.vehicle.getColor(vid))
+
+                        seen_vehicles.add(vid)
+                        last_mirroring[vid] = step # Mark as just updated
+                    except traci.TraCIException as e:
+                        logger.error(f"Failed to spawn detected vehicle {vid}: {e}")
+                        continue
+                
+                # --- B. UPDATE EXISTING VEHICLES ---
+                is_mirroring_due = (step - last_mirroring.get(vid, -gps_update_interval) >= gps_update_interval)
+                if is_mirroring_due:
+                    last_mirroring[vid] = step
+                    # Get fresh state from Sim A for the update
+                    true_pos = connA.vehicle.getPosition(vid)
+                    speed, is_stopped = get_vehicle_state(connA, vid, stop_counter)
+                    road_id = connA.vehicle.getRoadID(vid)
+                    lane_id = connA.vehicle.getLaneID(vid)
+                    lane_index = int(lane_id.split('_')[-1]) if lane_id and '_' in lane_id else 0
+                    
+                    state = {
+                        'speed': speed, 'is_stopped': is_stopped, 'true_pos': true_pos,
+                        'road_id': road_id, 'lane_index': lane_index,
+                        'last_mirror_step': last_mirroring.get(vid, 0),
+                        'camera_cache': CAMERA_CACHE, 'gps_pos': data.get('gps_pos')
+                    }
+
+                    success, intervention_type = mirror_with_fallback(connA, connB, vid, step, state)
+                    
+                    # Log data for analysis
+                    updated_pos = connB.vehicle.getPosition(vid)
+                    lag = euclidean(true_pos, updated_pos)
+                    gps_logger.writerow([step, vid, true_pos[0], true_pos[1], state['gps_pos'][0] if state['gps_pos'] else None, state['gps_pos'][1] if state['gps_pos'] else None, updated_pos[0], updated_pos[1], lag, intervention_type])
+
+            # --- STEP 3: HANDLE UN-DETECTED BUT EXISTING VEHICLES ---
+            undetected_vids = seen_vehicles - detected_vehicles_this_step.keys()
+            for vid in undetected_vids:
+                try:
+                    # For vehicles that are "coasting" without sensor data, we apply smoothing
+                    speed, is_stopped = get_vehicle_state(connA, vid, stop_counter)
+                    state = {'speed': speed, 'is_stopped': is_stopped}
+                    handle_between_update(connB, vid, state, vehicle_last_speed)
+                except traci.TraCIException:
+                    logger.warning(f"Could not find vehicle {vid} in Sim A to update its coasting speed. It may have departed.")
+                    seen_vehicles.discard(vid) # Remove from seen set if it's gone
 
             # Synchronize Traffic Lights
             for tl_id in connA.trafficlight.getIDList():
@@ -291,68 +367,6 @@ def mirror_simulation(configA, configB, portA, portB, max_steps, step_length):
                     connB.trafficlight.setRedYellowGreenState(tl_id, state)
                 except traci.TraCIException:
                     logger.warning(f"Could not sync traffic light {tl_id}. It may not exist in Sim B.")
-
-            # Process all vehicles from the 'real' simulation
-            for vid in connA.vehicle.getIDList():
-                if vid not in seen_vehicles:
-                    try:
-                        pos = connA.vehicle.getPosition(vid)
-                        speed = connA.vehicle.getSpeed(vid)
-                        road_id = connA.vehicle.getRoadID(vid)
-                        route_edges = connA.vehicle.getRoute(vid)
-                        route_id = f"{vid}_route"
-                        veh_type = connA.vehicle.getTypeID(vid)
-                        
-                        connB.route.add(route_id, route_edges)
-                        connB.vehicle.add(vid, routeID=route_id, typeID=veh_type)
-                        connB.vehicle.moveToXY(vid, edgeID=road_id, laneIndex=0, x=pos[0], y=pos[1], keepRoute=1)
-                        connB.vehicle.setSpeed(vid, speed)
-                        connB.vehicle.setColor(vid, (0, 255, 0, 255)) # Green for mirrored vehicle
-
-                        seen_vehicles.add(vid)
-                        just_added_steps[vid] = step
-                        logger.info(f"SPAWN: Mirrored new vehicle {vid} in Sim B.")
-                    except traci.TraCIException as e:
-                        logger.error(f"Failed to add vehicle {vid} to Sim B: {e}")
-                        continue
-                
-                # Skip updates for a few steps after adding to stabilize
-                if step - just_added_steps.get(vid,0) < 2:
-                    continue
-
-                # Get state from the 'real' vehicle
-                true_pos = connA.vehicle.getPosition(vid)
-                speed, is_stopped = get_vehicle_state(connA, vid, stop_counter)
-                road_id = connA.vehicle.getRoadID(vid)
-                lane_id = connA.vehicle.getLaneID(vid)
-                lane_index = int(lane_id.split('_')[-1]) if lane_id and '_' in lane_id else 0
-
-                state = {
-                    'speed': speed, 'is_stopped': is_stopped, 'true_pos': true_pos,
-                    'road_id': road_id, 'lane_index': lane_index,
-                    'last_mirror_step': last_mirroring.get(vid, 0),
-                    'camera_cache': CAMERA_CACHE, 'gps_pos': None
-                }
-
-                # Decide if a sensor update (mirroring) is due
-                is_mirroring_due = (step - last_mirroring.get(vid, -gps_update_interval) >= gps_update_interval)
-                if is_mirroring_due:
-                    last_mirroring[vid] = step
-                    
-                    gps_x, gps_y, _ = get_noisy_gps_position(connA, vid)
-                    if gps_x is not None:
-                        state['gps_pos'] = (gps_x, gps_y)
-                    
-                    logger.debug(f"Attempting sensor fusion mirror for {vid} at step {step}.")
-                    success, intervention_type = mirror_with_fallback(connA, connB, vid, step, state)
-
-                    # Log data for analysis
-                    updated_pos = connB.vehicle.getPosition(vid)
-                    lag = euclidean(true_pos, updated_pos)
-                    gps_logger.writerow([step, vid, true_pos[0], true_pos[1], gps_x, gps_y, updated_pos[0], updated_pos[1], lag, intervention_type])
-                
-                else: # Between sensor updates
-                    handle_between_update(connB, vid, state, vehicle_last_speed)
             
             step += 1
             time.sleep(step_length)
@@ -363,23 +377,13 @@ def mirror_simulation(configA, configB, portA, portB, max_steps, step_length):
         logger.critical(f"A critical error occurred in the main loop: {e}", exc_info=True)
     finally:
         logger.info("Cleaning up and closing connections...")
-        # The 'in locals()' check is sufficient to prevent errors if connection failed.
-        # traci.close() is safe to call without an isconnected() check.
-        if 'connA' in locals():
-            connA.close()
-        if 'connB' in locals():
-            connB.close()
-        
-        if 'gps_log_file' in locals() and not gps_log_file.closed:
-            gps_log_file.close()
-            
+        if 'connA' in locals(): connA.close()
+        if 'connB' in locals(): connB.close()
+        if 'gps_log_file' in locals() and not gps_log_file.closed: gps_log_file.close()
         close_camera_log()
-        
-        if 'sumo_processA' in locals():
-            sumo_processA.terminate()
-        if 'sumo_processB' in locals():
-            sumo_processB.terminate()
-            
+        if 'sumo_processA' in locals(): sumo_processA.terminate()
+        if 'sumo_processB' in locals(): sumo_processB.terminate()
+        logger.info("Cleanup complete. Simulation finished.")
 
 
 def main():
@@ -394,7 +398,6 @@ def main():
     parser.add_argument("--verbose", action="store_true", help="Show detailed DEBUG messages on console.")
     args = parser.parse_args()
 
-    #+ Setup logging
     log_level = logging.DEBUG if args.verbose else logging.INFO
     setup_logging(console_level=log_level)
 

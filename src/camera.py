@@ -9,9 +9,9 @@ logger = logging.getLogger(__name__)
 
 # --- CAMERAS and file setup are unchanged ---
 CAMERAS = {
-    "cctv_main": { "x": 1364.05, "y": 887.61, "range": 200 },
-    "cctv_top1": { "x": 2093.4, "y": 1409.50, "range": 200 },
-    "cctv_top2": { "x": 1897.34, "y": 1240.93, "range": 200 }
+    "cctv_main": { "x": 1364.05, "y": 887.61, "range": 20 },
+    "cctv_top1": { "x": 2093.4, "y": 1409.50, "range": 20 },
+    "cctv_top2": { "x": 1897.34, "y": 1240.93, "range": 20 }
 }
 
 # --- MODIFIED CACHE FORMAT ---
