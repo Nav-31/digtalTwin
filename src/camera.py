@@ -1,7 +1,12 @@
+# camera.py
 import traci
 import math
 import random
 import csv
+import logging #+
+
+#+ Get a logger instance for this module
+logger = logging.getLogger(__name__)
 
 # Define a virtual CCTV camera
 CAMERAS = {
@@ -25,10 +30,16 @@ CAMERAS = {
 # In-memory cache of last detection: vid → (step, cam_id, speed, lane, angle, noisy_dist)
 CAMERA_CACHE = {}
 
-# Logging setup
-camera_log = open("camera_detections.csv", "w", newline='')
-log_writer = csv.writer(camera_log)
-log_writer.writerow(["step", "camera_id", "vehicle_id", "speed", "lane", "angle", "noisy_distance"])
+# --- Data Logging (for analysis, separate from operational logging) ---
+try:
+    camera_log_file = open("camera_detections.csv", "w", newline='')
+    log_writer = csv.writer(camera_log_file)
+    log_writer.writerow(["step", "camera_id", "vehicle_id", "speed", "lane", "angle", "noisy_distance"])
+except IOError:
+    #+ Use logger for errors
+    logger.error("Could not open camera_detections.csv for writing.")
+    log_writer = None
+
 
 def compute_noisy_distance(x1, y1, x2, y2, noise_factor=0.05):
     true_dist = math.hypot(x1 - x2, y1 - y2)
@@ -40,31 +51,37 @@ def update_virtual_cameras(step, conn):
         for vid in conn.vehicle.getIDList():
             try:
                 vx, vy = conn.vehicle.getPosition(vid)
-                lane = conn.vehicle.getLaneID(vid)
-                speed = conn.vehicle.getSpeed(vid)
-                angle = conn.vehicle.getAngle(vid)
-
-                # Euclidean distance
                 dist = math.hypot(vx - cam["x"], vy - cam["y"])
+
                 if dist <= cam["range"]:
+                    #-- This is a high-frequency event, so we use DEBUG level.
+                    #-- It will appear in simulation.log but not on the console by default.
+                    logger.debug(f"Vehicle {vid} detected by camera {cam_id} at distance {dist:.1f}m.")
+
+                    lane = conn.vehicle.getLaneID(vid)
+                    speed = conn.vehicle.getSpeed(vid)
+                    angle = conn.vehicle.getAngle(vid)
+                    
                     noisy_dist = compute_noisy_distance(cam["x"], cam["y"], vx, vy)
                     noisy_speed = speed * (1 + 0.02 * random.uniform(-1, 1))
-                    # write to CSV
-                    log_writer.writerow([
-                        step, cam_id, vid,
-                        round(noisy_speed, 2), lane, round(angle, 1), round(noisy_dist, 2)
-                    ])
+
+                    # write to CSV data log
+                    if log_writer:
+                        log_writer.writerow([
+                            step, cam_id, vid,
+                            round(noisy_speed, 2), lane, round(angle, 1), round(noisy_dist, 2)
+                        ])
+                        
                     # update in-memory cache
                     CAMERA_CACHE[vid] = (
-                        step,
-                        cam_id,
-                        round(noisy_speed, 2),
-                        lane,
-                        round(angle, 1),
-                        round(noisy_dist, 2)
+                        step, cam_id, round(noisy_speed, 2), lane,
+                        round(angle, 1), round(noisy_dist, 2)
                     )
             except traci.TraCIException:
+                # Vehicle might have departed, which is normal.
                 continue
 
 def close_camera_log():
-    camera_log.close()
+    if camera_log_file:
+        camera_log_file.close()
+        logger.info("Camera detection data log closed.") #+

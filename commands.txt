@@ -56,3 +56,8 @@ GENERAL TRAFFIC 2:
 
 MAIN HIGHWAY
     <route id="triq" edges="-10513069#7 -10513069#6 -10513069#5 -10513069#4 -10513069#2 -10513069#0 -11967800#4 -11967800#1 -11967800#0 11967800#0 11967800#1 11967800#3 4806124#0 10513069#1 10513069#4 10513069#5 10513069#6 10513069#7"/>
+
+
+
+#running run_simulation
+python .\run_simulation.py --configA dub.sumocfg.xml --configB simB.sumocfg.xml --portA 8813 --portB 8814 --steps 10000 --interval 0.1 --verbose
