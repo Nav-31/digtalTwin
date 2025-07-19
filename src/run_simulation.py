@@ -84,23 +84,24 @@ class CameraMirroringStrategy(BaseMirroringStrategy):
     def mirror(self, connA, connB, vid, step, state):
         det = state['camera_cache'].get(vid)
         if det:
-            det_step, cam_id, speed, lane, angle, noisy_dist = det
-            if det_step >= state['last_mirror_step']: # Use ">=" to include current step
+            # --- MODIFIED TO UNPACK NEW CACHE FORMAT ---
+            det_step, cam_id, speed, noisy_x, noisy_y = det
+            
+            if det_step >= state['last_mirror_step']:
                 logger.info(f"Using fresh camera detection for {vid} from {cam_id} (detected at step {det_step}).")
-                cam = CAMERAS[cam_id]
-                theta = math.radians(90 - angle) # SUMO angle (0=N, 90=E) to standard angle (0=E, 90=N)
-                x = cam['x'] + noisy_dist * math.cos(theta)
-                y = cam['y'] + noisy_dist * math.sin(theta)
                 
+                # --- SIMPLIFIED LOGIC ---
+                # No more complex angle math. Just use the coordinates provided by the sensor.
                 connB.vehicle.moveToXY(
                     vid, edgeID=state['road_id'], laneIndex=state['lane_index'],
-                    x=x, y=y, keepRoute=1
+                    x=noisy_x, y=noisy_y, keepRoute=1
                 )
                 connB.vehicle.setSpeed(vid, speed)
-                logger.info(f"CAMERA_UPDATE: {vid} moved to ({x:.1f}, {y:.1f}) with speed {speed:.1f}.")
+                logger.info(f"CAMERA_UPDATE: {vid} moved to ({noisy_x:.1f}, {noisy_y:.1f}) with speed {speed:.1f}.")
                 return True, 'camera_update'
+                
         logger.debug(f"No fresh camera detection for {vid} at step {step}.")
-        return False, 'camera_no_update' # Return False as no action was taken
+        return False, 'camera_no_update'
 
 class LoopMirroringStrategy(BaseMirroringStrategy):
     def mirror(self, connA, connB, vid, step, state):
@@ -139,7 +140,7 @@ def get_noisy_gps_position(conn, vehicle_id, std_dev=2.5):
         # In the original code, this was returning None. Assuming you want noisy GPS.
         noisy_x = true_pos[0] + random.gauss(0, std_dev)
         noisy_y = true_pos[1] + random.gauss(0, std_dev)
-        return noisy_x, noisy_y, true_pos
+        return None, None, true_pos
     except Exception as e:
         logger.error(f"Failed to get GPS position for {vehicle_id}: {e}")
         return None, None, (None, None)
