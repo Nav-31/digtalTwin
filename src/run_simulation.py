@@ -127,16 +127,48 @@ def mirror_with_fallback(connA, connB, vid, step, state):
 def euclidean(a, b):
     return math.hypot(a[0] - b[0], a[1] - b[1])
 
+def should_have_gps(vtype):
+    """
+    Determines if a vehicle should have a functioning GPS based on its type.
+    
+    Args:
+        vtype (str): The vehicle type ID (e.g., 'bus', 'car').
+        
+    Returns:
+        bool: True if the vehicle should have GPS, False otherwise.
+    """
+    gps_enabled_types = {'bus' , 'taxi'}
+    return vtype in gps_enabled_types
+
 def get_noisy_gps_position(conn, vehicle_id, std_dev=2.5):
+    """
+    Generates a noisy GPS position, but only for specific vehicle types.
+    Returns None for vehicle types that are not GPS-enabled (e.g., 'car').
+    """
     try:
-        true_pos = conn.vehicle.getPosition(vehicle_id)
-        # --- FOR TESTING: To re-enable GPS, comment out the first return and uncomment the second ---
-        return None, None, true_pos # This forces camera fallback
-        # noisy_x = true_pos[0] + random.gauss(0, std_dev)
-        # noisy_y = true_pos[1] + random.gauss(0, std_dev)
-        # return noisy_x, noisy_y, true_pos
+        # First, get the vehicle's type ID from the simulation.
+        vtype = conn.vehicle.getTypeID(vehicle_id)
+        
+        # Check if this vehicle type should have GPS enabled.
+        if should_have_gps(vtype):
+            # This vehicle is GPS-enabled, so generate noisy coordinates.
+            logger.debug(f"Vehicle {vehicle_id} (type: {vtype}) has GPS. Generating signal.")
+            true_pos = conn.vehicle.getPosition(vehicle_id)
+            noisy_x = true_pos[0] + random.gauss(0, std_dev)
+            noisy_y = true_pos[1] + random.gauss(0, std_dev)
+            return noisy_x, noisy_y, true_pos
+        else:
+            # This vehicle type (e.g., 'car') does not have GPS.
+            logger.debug(f"Vehicle {vehicle_id} (type: {vtype}) has NO GPS. Returning None.")
+            true_pos = conn.vehicle.getPosition(vehicle_id)
+            return None, None, true_pos
+            
+    except traci.TraCIException as e:
+        # This can happen if the vehicle has already left the simulation.
+        logger.warning(f"Could not get type for {vehicle_id} while checking for GPS: {e}")
+        return None, None, (None, None)
     except Exception as e:
-        logger.error(f"Failed to get GPS position for {vehicle_id}: {e}")
+        logger.error(f"An unexpected error occurred in get_noisy_gps_position for {vehicle_id}: {e}")
         return None, None, (None, None)
 
 def detect_traffic_light_proximity(conn, vehicle_id, proximity_threshold=None):
