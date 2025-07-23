@@ -9,13 +9,14 @@ logger = logging.getLogger(__name__)
 
 # --- CAMERAS and file setup are unchanged ---
 CAMERAS = {
-    "cctv_main": { "x": 1364.05, "y": 887.61, "range": 20 },
-    "cctv_top1": { "x": 2093.4, "y": 1409.50, "range": 20 },
-    "cctv_top2": { "x": 1897.34, "y": 1240.93, "range": 20 }
+    "cctv_main": { "x": 1364.05, "y": 887.61, "range": 200 },
+    # "cctv_top1": { "x": 2093.4, "y": 1409.50, "range": 20 },
+    # "cctv_top2": { "x": 1897.34, "y": 1240.93, "range": 20 }
+     "cctv_top2": { "x": 1896.19, "y": 1242.52, "range": 200 }
 }
 
-# --- MODIFIED CACHE FORMAT ---
-# The cache now stores: vid → (step, cam_id, noisy_speed, noisy_x, noisy_y)
+
+# The cache  stores: vid → (step, cam_id, noisy_speed, noisy_x, noisy_y)
 CAMERA_CACHE = {}
 
 try:
@@ -27,7 +28,7 @@ except IOError:
     logger.error("Could not open camera_detections.csv for writing.")
     log_writer = None
 
-# --- compute_noisy_distance is no longer needed ---
+
 
 def update_virtual_cameras(step, conn):
     for cam_id, cam in CAMERAS.items():
@@ -66,7 +67,6 @@ def update_virtual_cameras(step, conn):
             except traci.TraCIException:
                 continue
 
-# --- close_camera_log is unchanged ---
 def close_camera_log():
     if 'camera_log_file' in locals() and camera_log_file:
         camera_log_file.close()

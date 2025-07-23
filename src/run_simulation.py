@@ -14,10 +14,8 @@ from camera import update_virtual_cameras, close_camera_log, CAMERA_CACHE, CAMER
 
 logger = logging.getLogger(__name__)
 
-# --- All code from the top down to mirror_simulation remains the same ---
-# (handle_between_update, HybridConfig, Mirroring Strategies, utility functions, etc.)
 
-# ... (Paste all previous functions here, from handle_between_update to hybrid_gps_mirroring)
+
 def handle_between_update(connB, vid, state, vehicle_last_speed):
     """
     Called when we’re *not* applying an explicit mirror update.
@@ -276,7 +274,7 @@ def hybrid_gps_mirroring(connA, connB, vehicle_id, gps_pos, current_speed, is_st
         return False, "error"
 
 
-# --- Main Mirroring Loop (RESTRUCTURED) ---
+# --- Main Mirroring Loop  ---
 def mirror_simulation(configA, configB, portA, portB, max_steps, step_length):
     try:
         sumo_processA = subprocess.Popen(["sumo-gui", "-c", configA, "--start", "--remote-port", str(portA)])
