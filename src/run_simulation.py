@@ -26,6 +26,9 @@ from camera import update_virtual_cameras, close_camera_log, CAMERA_CACHE, CAMER
 
 logger = logging.getLogger(__name__)
 
+# Global tracking for collision avoidance cooldowns to prevent emergency braking loops
+collision_avoidance_cooldowns = {}
+
 
 
 def handle_between_update(connB, vid, state, vehicle_last_speed):
@@ -79,23 +82,18 @@ class HybridConfig:
     SPEED_SMOOTH_FACTOR = 0.8           # Increased from 0.7 for better responsiveness
     GRADUAL_STOP_FACTOR = 0.8           # Increased from 0.7 for smoother stopping
     
-    # Taxi-specific parameters to prevent glitching
-    TAXI_MAX_SPEED_FOR_CORRECTION = 8.0    # Lower speed threshold for taxis
-    TAXI_MAX_GPS_ERROR = 8.0               # Skip correction if GPS error too large
-    TAXI_MAX_CORRECTION_FACTOR = 0.1       # Very conservative taxi corrections
-    
     # Camera-specific parameters for non-GPS vehicles
     CAMERA_MIN_CORRECTION_DISTANCE = 5.0    # Minimum distance before applying camera correction
     CAMERA_MAX_CORRECTION_DISTANCE = 50.0   # Maximum distance for camera correction
     CAMERA_CORRECTION_FACTOR = 0.2          # Slightly increased from 0.15
     CAMERA_SPEED_BLEND_FACTOR = 0.3         # Back to 0.3 for better responsiveness
     
-    # Collision avoidance parameters
-    SAFE_FOLLOWING_DISTANCE = 8.0          # Minimum safe distance between vehicles
-    COLLISION_WARNING_DISTANCE = 15.0      # Distance to start collision avoidance
-    EMERGENCY_BRAKE_DISTANCE = 5.0         # Critical distance for emergency braking
-    LANE_CHANGE_SAFETY_DISTANCE = 20.0     # Safe distance for lane changes
-    SPEED_REDUCTION_FACTOR = 0.6            # Factor to reduce speed for collision avoidance
+    # Collision avoidance parameters - FIXED: Made consistent for all vehicle types
+    SAFE_FOLLOWING_DISTANCE = 12.0         # Increased minimum safe distance between vehicles
+    COLLISION_WARNING_DISTANCE = 20.0      # Increased distance to start collision avoidance
+    EMERGENCY_BRAKE_DISTANCE = 3.0         # Reduced critical distance for emergency braking (was too aggressive)
+    LANE_CHANGE_SAFETY_DISTANCE = 25.0     # Increased safe distance for lane changes
+    SPEED_REDUCTION_FACTOR = 0.7            # Less aggressive speed reduction factor
 
 # --- Mirroring Strategies ---
 class BaseMirroringStrategy:
@@ -337,21 +335,21 @@ def check_collision_risk(connB, vehicle_id):
                         closest_ahead = vehicle
                         min_ahead_distance = vehicle['distance']
         
-        # Determine collision risk level
+        # Determine collision risk level - FIXED: More consistent thresholds
         if closest_ahead:
             distance = closest_ahead['distance']
             relative_speed = speed - closest_ahead['speed']
             
-            # Critical collision risk
-            if distance < HybridConfig.EMERGENCY_BRAKE_DISTANCE:
+            # Critical collision risk - only for very close vehicles
+            if distance < HybridConfig.EMERGENCY_BRAKE_DISTANCE and relative_speed > 1.0:
                 return "critical", {"action": "emergency_brake", "target_vehicle": closest_ahead['id'], "distance": distance}
             
             # High collision risk - need to slow down significantly
-            elif distance < HybridConfig.SAFE_FOLLOWING_DISTANCE and relative_speed > 2.0:
+            elif distance < HybridConfig.SAFE_FOLLOWING_DISTANCE and relative_speed > 3.0:
                 return "high", {"action": "reduce_speed", "target_vehicle": closest_ahead['id'], "distance": distance, "relative_speed": relative_speed}
             
             # Moderate collision risk - maintain safe following distance
-            elif distance < HybridConfig.COLLISION_WARNING_DISTANCE and relative_speed > 0:
+            elif distance < HybridConfig.COLLISION_WARNING_DISTANCE and relative_speed > 0.5:
                 return "moderate", {"action": "maintain_distance", "target_vehicle": closest_ahead['id'], "distance": distance}
         
         return "none", None
@@ -363,27 +361,42 @@ def check_collision_risk(connB, vehicle_id):
 def apply_collision_avoidance(connB, vehicle_id, risk_level, risk_info):
     """
     Apply collision avoidance measures based on risk level.
+    FIXED: Less aggressive and more consistent across all vehicle types.
+    Includes cooldown mechanism to prevent emergency braking loops.
     """
     try:
+        # Check cooldown to prevent repeated emergency interventions
+        current_time = time.time()
+        if vehicle_id in collision_avoidance_cooldowns:
+            last_intervention = collision_avoidance_cooldowns[vehicle_id]
+            # Cooldown period: 2 seconds for critical, 1 second for others
+            cooldown_period = 2.0 if risk_level == "critical" else 1.0
+            if current_time - last_intervention < cooldown_period:
+                logger.debug(f"Collision avoidance cooldown active for {vehicle_id}, skipping intervention")
+                return True
+        
         current_speed = connB.vehicle.getSpeed(vehicle_id)
         
         if risk_level == "critical":
-            # Emergency brake
-            new_speed = max(0, current_speed * 0.1)  # Reduce to 10% of current speed
+            # Emergency brake - but not as harsh
+            new_speed = max(0, current_speed * 0.3)  # FIXED: Reduce to 30% instead of 10%
             connB.vehicle.setSpeed(vehicle_id, new_speed)
             logger.warning(f"COLLISION AVOIDANCE: Emergency brake for {vehicle_id} (distance: {risk_info['distance']:.1f}m)")
+            collision_avoidance_cooldowns[vehicle_id] = current_time
             
         elif risk_level == "high":
-            # Significant speed reduction
+            # Significant speed reduction - but gentler
             new_speed = max(0, current_speed * HybridConfig.SPEED_REDUCTION_FACTOR)
             connB.vehicle.setSpeed(vehicle_id, new_speed)
             logger.info(f"COLLISION AVOIDANCE: Speed reduction for {vehicle_id} (distance: {risk_info['distance']:.1f}m)")
+            collision_avoidance_cooldowns[vehicle_id] = current_time
             
         elif risk_level == "moderate":
             # Gentle speed adjustment to maintain safe distance
-            new_speed = max(0, current_speed * 0.8)
+            new_speed = max(0, current_speed * 0.85)  # FIXED: Less aggressive (was 0.8)
             connB.vehicle.setSpeed(vehicle_id, new_speed)
             logger.debug(f"COLLISION AVOIDANCE: Gentle slowdown for {vehicle_id} (distance: {risk_info['distance']:.1f}m)")
+            # No cooldown for moderate interventions to allow frequent gentle adjustments
             
         return True
         
@@ -391,24 +404,33 @@ def apply_collision_avoidance(connB, vehicle_id, risk_level, risk_info):
         logger.warning(f"Failed to apply collision avoidance for {vehicle_id}: {e}")
         return False
 
-def check_safe_position_update(connB, vehicle_id, target_x, target_y):
+def check_safe_position_update(connB, vehicle_id, target_x, target_y, gps_error=0):
     """
     Check if moving a vehicle to a target position would cause collisions.
     Returns True if safe, False if risky.
+    Uses adaptive safety distances based on GPS error - larger errors get more lenient safety checks.
     """
     try:
-        # Get vehicle type - be less restrictive for non-GPS vehicles
-        try:
-            # Check if this is a GPS vehicle
-            all_vehicles = connB.vehicle.getIDList()
-            if vehicle_id in all_vehicles:
-                # For existing vehicles, we can't easily get type from connB, so assume it's needed
-                pass
-        except:
-            pass
-            
-        # Check if any other vehicle is too close to the target position
-        min_distance = HybridConfig.SAFE_FOLLOWING_DISTANCE
+        # Get current position to calculate GPS error if not provided
+        if gps_error == 0:
+            try:
+                current_pos = connB.vehicle.getPosition(vehicle_id)
+                gps_error = euclidean(current_pos, (target_x, target_y))
+            except:
+                gps_error = 0
+        
+        # Adaptive safety distance based on GPS error severity
+        # For severe GPS errors (>30m), use very lenient safety to prevent coordinate corruption
+        # For moderate errors (10-30m), use reduced safety distance
+        # For small errors (<10m), use standard safety distance
+        if gps_error > 30.0:
+            min_distance = 3.0  # Emergency mode - only prevent immediate collisions
+            logger.info(f"EMERGENCY GPS CORRECTION: Using minimal safety distance {min_distance}m for {vehicle_id} (GPS error: {gps_error:.1f}m)")
+        elif gps_error > 15.0:
+            min_distance = 6.0  # Reduced safety for moderate errors
+            logger.debug(f"REDUCED SAFETY: Using {min_distance}m safety distance for {vehicle_id} (GPS error: {gps_error:.1f}m)")
+        else:
+            min_distance = HybridConfig.SAFE_FOLLOWING_DISTANCE  # Standard safety for small errors
         
         for other_vid in connB.vehicle.getIDList():
             if other_vid != vehicle_id:
@@ -418,8 +440,13 @@ def check_safe_position_update(connB, vehicle_id, target_x, target_y):
                     
                     # If another vehicle is too close to our target position, it's not safe
                     if distance_to_target < min_distance:
-                        logger.warning(f"Position update for {vehicle_id} blocked by {other_vid} at distance {distance_to_target:.1f}m")
-                        return False
+                        if gps_error > 30.0:
+                            # For severe GPS errors, log but allow anyway to prevent coordinate corruption
+                            logger.warning(f"EMERGENCY OVERRIDE: Allowing GPS correction for {vehicle_id} despite {other_vid} at {distance_to_target:.1f}m (GPS error: {gps_error:.1f}m)")
+                            return True
+                        else:
+                            logger.warning(f"Position update for {vehicle_id} blocked by {other_vid} at distance {distance_to_target:.1f}m")
+                            return False
                         
                 except traci.TraCIException:
                     continue
@@ -541,6 +568,31 @@ def hybrid_gps_mirroring(connA, connB, vehicle_id, gps_pos, current_speed, is_st
         
         intervention_needed = False
         position_intervention = "none"
+        
+        # EMERGENCY RECOVERY: Check for catastrophic GPS errors that indicate coordinate corruption
+        if gps_error > 100.0:  # Catastrophic error threshold
+            logger.error(f"CATASTROPHIC GPS ERROR: {vehicle_id} has {gps_error:.1f}m error - attempting emergency recovery")
+            try:
+                # Force immediate correction to prevent further corruption
+                road_id = connA.vehicle.getRoadID(vehicle_id)
+                lane_id = connA.vehicle.getLaneID(vehicle_id)
+                lane_index = int(lane_id.split('_')[-1]) if lane_id and '_' in lane_id else 0
+                
+                # Use minimal correction to prevent overcorrection spiral
+                correction_factor = 0.3  # Conservative for emergency recovery
+                corrected_x = current_mirror_pos[0] + correction_factor * (gps_pos[0] - current_mirror_pos[0])
+                corrected_y = current_mirror_pos[1] + correction_factor * (gps_pos[1] - current_mirror_pos[1])
+                
+                # Emergency override - use SAME strategy for ALL GPS vehicles
+                connB.vehicle.moveToXY(vehicle_id, edgeID=road_id, laneIndex=lane_index, 
+                                     x=corrected_x, y=corrected_y, keepRoute=1)
+                
+                logger.info(f"EMERGENCY RECOVERY: Applied emergency correction to {vehicle_id}")
+                return True, "emergency_recovery"
+                
+            except Exception as e:
+                logger.error(f"Emergency recovery failed for {vehicle_id}: {e}")
+                return False, "emergency_recovery_failed"
 
         # Be more conservative about GPS corrections to prevent lane jumping
         if gps_error > HybridConfig.MIN_GPS_ERROR_FOR_CORRECTION:
@@ -550,49 +602,27 @@ def hybrid_gps_mirroring(connA, connB, vehicle_id, gps_pos, current_speed, is_st
             except:
                 vtype = "unknown"
             
-            # Check if GPS position update is safe (no collisions)
-            is_safe_update = check_safe_position_update(connB, vehicle_id, gps_pos[0], gps_pos[1])
+            # Check if GPS position update is safe (no collisions) - pass GPS error for adaptive safety
+            is_safe_update = check_safe_position_update(connB, vehicle_id, gps_pos[0], gps_pos[1], gps_error)
             if not is_safe_update:
                 logger.warning(f"GPS correction for {vehicle_id} skipped due to collision risk")
                 position_intervention = "no_correction_collision_risk"
             else:
-                # Special handling for taxis - they are more prone to glitching
-                if vtype == 'taxi':
-                    # Be much more conservative with taxi corrections
-                    if current_mirror_speed > 8.0:  # Lower threshold for taxis (8 m/s instead of 15)
-                        position_intervention = "no_correction_taxi_moving"
-                        logger.debug(f"GPS: Taxi {vehicle_id} moving ({current_mirror_speed:.1f} m/s), skipping correction to prevent glitching.")
-                    elif gps_error > 8.0:  # Skip if GPS error is too large for taxis
-                        position_intervention = "no_correction_taxi_large_error"
-                        logger.debug(f"GPS: Taxi {vehicle_id} has large GPS error ({gps_error:.1f}m), skipping to prevent crash.")
-                    elif is_vehicle_stopped_at_light(connB, vehicle_id):
-                        position_intervention = "no_move_at_light"
-                        logger.info(f"GPS: Taxi {vehicle_id} has error {gps_error:.1f}m, but is stopped at a light. No position change.")
-                    elif is_near_light_mirror and dist_mirror < HybridConfig.CRITICAL_LIGHT_DISTANCE:
-                        position_intervention = "minimal_correction"
-                        intervention_needed = True
-                        logger.info(f"GPS: Taxi {vehicle_id} is near a light. Applying minimal correction for error {gps_error:.1f}m.")
-                    else:
-                        # Only apply very small corrections for taxis
-                        position_intervention = "taxi_minimal_correction"
-                        intervention_needed = True
-                        logger.info(f"GPS: Applying minimal taxi correction for {vehicle_id} with error {gps_error:.1f}m.")
+                # Standard handling for ALL GPS vehicles (buses, taxis - treated identically)
+                if current_mirror_speed > 15.0:  # Threshold for all GPS vehicles
+                    position_intervention = "no_correction_fast_moving"
+                    logger.debug(f"GPS: {vehicle_id} moving very fast ({current_mirror_speed:.1f} m/s), skipping correction to prevent issues.")
+                elif is_vehicle_stopped_at_light(connB, vehicle_id):
+                    position_intervention = "no_move_at_light"
+                    logger.info(f"GPS: {vehicle_id} has error {gps_error:.1f}m, but is stopped at a light. No position change.")
+                elif is_near_light_mirror and dist_mirror < HybridConfig.CRITICAL_LIGHT_DISTANCE:
+                    position_intervention = "minimal_correction"
+                    intervention_needed = True
+                    logger.info(f"GPS: {vehicle_id} is near a light. Applying minimal correction for error {gps_error:.1f}m.")
                 else:
-                    # Regular handling for buses and other GPS vehicles
-                    if current_mirror_speed > 15.0:  # Increased threshold from 10 to 15 m/s
-                        position_intervention = "no_correction_fast_moving"
-                        logger.debug(f"GPS: {vehicle_id} moving very fast ({current_mirror_speed:.1f} m/s), skipping correction to prevent issues.")
-                    elif is_vehicle_stopped_at_light(connB, vehicle_id):
-                        position_intervention = "no_move_at_light"
-                        logger.info(f"GPS: {vehicle_id} has error {gps_error:.1f}m, but is stopped at a light. No position change.")
-                    elif is_near_light_mirror and dist_mirror < HybridConfig.CRITICAL_LIGHT_DISTANCE:
-                        position_intervention = "minimal_correction"
-                        intervention_needed = True
-                        logger.info(f"GPS: {vehicle_id} is near a light. Applying minimal correction for error {gps_error:.1f}m.")
-                    else:
-                        position_intervention = "gps_correction"
-                        intervention_needed = True
-                        logger.info(f"GPS: Applying correction for {vehicle_id} with error {gps_error:.1f}m.")
+                    position_intervention = "gps_correction"
+                    intervention_needed = True
+                    logger.info(f"GPS: Applying correction for {vehicle_id} with error {gps_error:.1f}m.")
 
         if intervention_needed:
             road_id = connA.vehicle.getRoadID(vehicle_id)
@@ -602,21 +632,18 @@ def hybrid_gps_mirroring(connA, connB, vehicle_id, gps_pos, current_speed, is_st
             correction_factor = calculate_gps_correction_factor(gps_error)
             if position_intervention == "minimal_correction":
                 correction_factor = min(correction_factor, HybridConfig.NEAR_LIGHT_CORRECTION_FACTOR)
-            elif position_intervention == "taxi_minimal_correction":
-                # Even more conservative correction for taxis
-                correction_factor = min(correction_factor, 0.1)  # Maximum 10% correction for taxis
-                logger.debug(f"Applying extra conservative taxi correction: {correction_factor:.3f}")
             
             # Apply conservative correction but not overly restrictive
             corrected_x = current_mirror_pos[0] + correction_factor * (gps_pos[0] - current_mirror_pos[0])
             corrected_y = current_mirror_pos[1] + correction_factor * (gps_pos[1] - current_mirror_pos[1])
             
-            # Double-check safety before applying correction
-            if check_safe_position_update(connB, vehicle_id, corrected_x, corrected_y):
-                # Use more conservative moveToXY with better lane preservation
+            # Double-check safety before applying correction - use adaptive safety based on GPS error
+            if check_safe_position_update(connB, vehicle_id, corrected_x, corrected_y, gps_error):
+                # Use the SAME strategy for ALL GPS vehicles (buses and taxis)
                 try:
+                    # ALL GPS vehicles use keepRoute=1 for consistent behavior
                     connB.vehicle.moveToXY(vehicle_id, edgeID=road_id, laneIndex=lane_index, 
-                                         x=corrected_x, y=corrected_y, keepRoute=1)  # Back to keepRoute=1 to prevent freezing
+                                         x=corrected_x, y=corrected_y, keepRoute=1)  # Same as buses
                     logger.debug(f"GPS correction applied to {vehicle_id}: factor={correction_factor:.2f}, lane={lane_index}")
                 except traci.TraCIException as e:
                     logger.warning(f"Failed to apply GPS correction to {vehicle_id}: {e}")
@@ -720,23 +747,6 @@ def mirror_simulation(configA, configB, portA, portB, max_steps, step_length):
 
             # --- STEP 2: PROCESS DETECTED VEHICLES (SPAWN OR UPDATE) ---
             for vid, data in detected_vehicles_this_step.items():
-                # --- Special safety check for taxis before processing ---
-                try:
-                    vtype = connA.vehicle.getTypeID(vid)
-                    if vtype == 'taxi':
-                        # Check if taxi is in a dangerous state
-                        speed = connA.vehicle.getSpeed(vid)
-                        lane_id = connA.vehicle.getLaneID(vid)
-                        
-                        # Skip processing if taxi is in unstable state
-                        if speed > 25.0 or not lane_id or lane_id == '':  # Increased from 15.0 to 25.0
-                            logger.warning(f"Skipping taxi {vid} processing due to unstable state (speed: {speed:.1f}, lane: {lane_id})")
-                            continue
-                except Exception:
-                    # If we can't check taxi state, skip it
-                    if vid in seen_vehicles:  # Only log for existing vehicles
-                        logger.warning(f"Cannot verify taxi {vid} state, skipping this step")
-                    continue
                 
                 # --- A. SENSOR-TRIGGERED SPAWNING ---
                 if vid not in seen_vehicles:
@@ -855,30 +865,30 @@ def mirror_simulation(configA, configB, portA, portB, max_steps, step_length):
                 is_gps_vehicle = should_have_gps(vtype)
                 
                 if is_gps_vehicle:
-                    # GPS vehicles: regular interval updates, but less frequent for taxis
-                    if vtype == 'taxi':
-                        # Taxis get updates every 15 steps instead of 10 to reduce glitching
-                        taxi_update_interval = 15
-                        is_mirroring_due = (step - last_mirroring.get(vid, -taxi_update_interval) >= taxi_update_interval)
-                        if is_mirroring_due:
-                            logger.debug(f"Taxi {vid} due for GPS update (every {taxi_update_interval} steps)")
-                    else:
-                        # Buses and other GPS vehicles: regular interval updates
-                        is_mirroring_due = (step - last_mirroring.get(vid, -gps_update_interval) >= gps_update_interval)
+                    # ALL GPS vehicles: same regular interval updates
+                    is_mirroring_due = (step - last_mirroring.get(vid, -gps_update_interval) >= gps_update_interval)
                 else:
                     # Non-GPS vehicles: only update when camera detects them at junctions/intersections
+                    # AND reduce frequency to minimize interference with GPS vehicles
                     if data['source'] == 'camera':
                         try:
                             road_id = connA.vehicle.getRoadID(vid)
                             is_at_junction = road_id.startswith(':') if road_id else False
                             is_near_junction = detect_traffic_light_proximity(connA, vid)[0]
                             
-                            # Only apply camera updates at strategic locations to prevent glitching
-                            is_mirroring_due = (is_at_junction or is_near_junction)
+                            # Reduce camera update frequency for non-GPS vehicles to minimize interference
+                            last_camera_update = last_mirroring.get(vid, -50)  # Increased interval from 10 to 50
+                            time_since_last_update = step - last_camera_update
+                            
+                            # Only apply camera updates at strategic locations AND with reduced frequency
+                            is_mirroring_due = (is_at_junction or is_near_junction) and time_since_last_update >= 30  # Minimum 30 steps between updates
                             if is_mirroring_due:
-                                logger.debug(f"Non-GPS vehicle {vid} at strategic location - applying camera update.")
+                                logger.debug(f"Non-GPS vehicle {vid} at strategic location - applying camera update (last update: {time_since_last_update} steps ago).")
                             else:
-                                logger.debug(f"Non-GPS vehicle {vid} detected by camera but not at strategic location - skipping update.")
+                                if is_at_junction or is_near_junction:
+                                    logger.debug(f"Non-GPS vehicle {vid} at strategic location but too soon since last update ({time_since_last_update} steps) - skipping to reduce interference.")
+                                else:
+                                    logger.debug(f"Non-GPS vehicle {vid} detected by camera but not at strategic location - skipping update.")
                         except traci.TraCIException:
                             is_mirroring_due = False
                     else:
@@ -925,15 +935,18 @@ def mirror_simulation(configA, configB, portA, portB, max_steps, step_length):
 
             # --- STEP 3: HANDLE UN-DETECTED BUT EXISTING VEHICLES ---
             undetected_vids = seen_vehicles - detected_vehicles_this_step.keys()
-            for vid in undetected_vids:
+            for vid in list(undetected_vids):  # Use list() to avoid modification during iteration
                 try:
                     # Check if vehicle still exists in both simulations
-                    if vid not in connA.vehicle.getIDList():
+                    exists_in_A = vid in connA.vehicle.getIDList()
+                    exists_in_B = vid in connB.vehicle.getIDList()
+                    
+                    if not exists_in_A:
                         logger.info(f"Vehicle {vid} departed from Sim A - removing from tracking")
                         seen_vehicles.discard(vid)
                         continue
                     
-                    if vid not in connB.vehicle.getIDList():
+                    if not exists_in_B:
                         logger.warning(f"Vehicle {vid} missing from Sim B but exists in Sim A - attempting respawn")
                         # Try to respawn the vehicle in Sim B
                         try:
@@ -967,13 +980,23 @@ def mirror_simulation(configA, configB, portA, portB, max_steps, step_length):
                                 connB.vehicle.setSpeed(vid, -1)
                                 logger.info(f"Released speed control for respawned {veh_type} {vid}")
                             
-                            logger.info(f"Respawned {veh_type} {vid} with speed {respawn_speed:.1f} m/s")
-                            logger.info(f"Successfully respawned {vid} in Sim B")
+                            # Set vehicle colors to match Sim A
+                            if veh_type == 'bus':
+                                connB.vehicle.setColor(vid, (0, 255, 0, 255))  # Green for buses
+                            elif veh_type == 'taxi':
+                                connB.vehicle.setColor(vid, (255, 255, 0, 255))  # Yellow for taxis
+                            elif veh_type == 'truck':
+                                connB.vehicle.setColor(vid, (0, 0, 255, 255))  # Blue for trucks
+                            elif veh_type == 'car':
+                                connB.vehicle.setColor(vid, (255, 0, 0, 255))  # Red for cars
+                            
+                            logger.info(f"Successfully respawned {veh_type} {vid} with speed {respawn_speed:.1f} m/s")
                         except Exception as respawn_e:
                             logger.error(f"Failed to respawn {vid} in Sim B: {respawn_e}")
                             seen_vehicles.discard(vid)
                         continue
                     
+                    # Both vehicles exist - continue with normal handling
                     # Check if this is a GPS vehicle - if so, apply smoothing
                     vtype = connA.vehicle.getTypeID(vid)
                     if should_have_gps(vtype):
@@ -1019,7 +1042,14 @@ def mirror_simulation(configA, configB, portA, portB, max_steps, step_length):
 
             # --- STEP 4: COLLISION MONITORING AND EMERGENCY INTERVENTION ---
             # Monitor only GPS vehicles for collision risks to avoid interfering with natural SUMO driving
-            for vid in list(connB.vehicle.getIDList()):
+            current_vehicles = set(connB.vehicle.getIDList())
+            
+            # Clean up cooldowns for vehicles that no longer exist
+            for vid in list(collision_avoidance_cooldowns.keys()):
+                if vid not in current_vehicles:
+                    del collision_avoidance_cooldowns[vid]
+            
+            for vid in list(current_vehicles):
                 if vid in seen_vehicles:
                     try:
                         # Only apply collision avoidance to GPS vehicles
@@ -1035,11 +1065,12 @@ def mirror_simulation(configA, configB, portA, portB, max_steps, step_length):
                         
                         if vtype and should_have_gps(vtype):
                             collision_risk, risk_info = check_collision_risk(connB, vid)
-                            if collision_risk == "critical":
-                                logger.warning(f"EMERGENCY: Critical collision risk detected for GPS vehicle {vid}")
+                            if collision_risk == "critical" or collision_risk == "high":
+                                # FIXED: Apply same logic to GPS vehicles as non-GPS vehicles
+                                logger.info(f"COLLISION RISK: GPS vehicle {vid} has {collision_risk} collision risk - applying avoidance")
                                 apply_collision_avoidance(connB, vid, collision_risk, risk_info)
-                            elif collision_risk == "high":
-                                logger.info(f"HIGH COLLISION RISK: Applying avoidance for GPS vehicle {vid}")
+                            elif collision_risk == "moderate":
+                                # Apply gentle avoidance for moderate risk
                                 apply_collision_avoidance(connB, vid, collision_risk, risk_info)
                         # Non-GPS vehicles are left to SUMO's natural collision avoidance
                         
