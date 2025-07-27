@@ -7,7 +7,11 @@
     <param key="device.gps.precision" value="2.5"/> <!-- noise in meters -->
     </vType>
 
-    <vType id="taxi" accel="1.0" decel="4.5" sigma="0.5" length="4.5" maxSpeed="60" color="yellow" vClass="taxi" guiShape="taxi"/>
+    <vType id="taxi" accel="1.0" decel="4.5" sigma="0.5" length="4.5" maxSpeed="60" color="yellow" vClass="taxi" guiShape="taxi">
+    <param key="has.device.gps" value="true"/>
+    <param key="device.gps.precision" value="2.5"/> <!-- noise in meters -->
+    </vType>
+    
     <vType id="car" accel="1.2" decel="4.5" sigma="0.5" length="5.0" maxSpeed="60" color="red" vClass="passenger" guiShape="passenger"/>
     <vType id="truck" accel="0.6" decel="3.5" sigma="0.5" length="10.0" maxSpeed="50" color="blue" vClass="truck" guiShape="truck"/>
     <vType id="pedestrian" length="0.5" minGap="0.2" accel="2.0" decel="2.0" speedFactor="1.0" color="magenta" vClass="pedestrian"/>
@@ -38,6 +42,10 @@
     <flow id="pedestrian_walking_to_busStop" begin="0" end="3600" personsPerHour="600" 
           type="pedestrian" route="General_flow"/>
 
+    <!-- Person Flow from Bus Stop -->
+    <personFlow id="pedestrian_leaving_busStop" begin="0" end="3600" personsPerHour="600">
+        <walk edges="-73352745#7" arrivalPos="200"/>
+    </personFlow>
 
     <!-- Bus flow  -->
     <flow id="bus_bypass_flow" begin="0" end="3600" vehsPerHour="50" type="bus" route="bypass_2" departLane="1" line="bus">
@@ -45,19 +53,16 @@
         <stop busStop="busStop2" duration="15" boarding="true"/>
     </flow>
 
-    <flow id="bus2" begin="0" end="3600" vehsPerHour="600" type="bus" route="truck_bypass" departLane="free" line="bus"/>
+    <flow id="bus2" begin="0" end="3600" vehsPerHour="150" type="bus" route="truck_bypass" departLane="free" line="bus"/>
 
 
     <!-- General Traffic flow  -->
-    <flow id="taxi_highway_flow" begin="0" end="3600" vehsPerHour="500" type="taxi" route="main_highway" departLane="1"/>
-    <flow id="car_highway_flow" begin="0" end="3600" vehsPerHour="500" type="car" route="main_highway" departLane="1"/>
+    <flow id="taxi_highway_flow" begin="0" end="3600" vehsPerHour="100" type="taxi" route="main_highway" departLane="1"/>
+    <flow id="car_highway_flow" begin="0" end="3600" vehsPerHour="100" type="car" route="main_highway" departLane="1"/>
 
     <!-- Trucks flow -->
-    <flow id="truck_bypass_flow" begin="0" end="3600" vehsPerHour="300" type="truck" route="truck_bypass"/>
+    <flow id="truck_bypass_flow" begin="0" end="3600" vehsPerHour="50" type="truck" route="truck_bypass"/>
 
-    <!-- Person Flow from Bus Stop -->
-    <personFlow id="pedestrian_leaving_busStop" begin="5" end="3600" personsPerHour="600">
-        <walk edges="-73352745#7" arrivalPos="200"/>
-    </personFlow>
+
 </routes>
     
