@@ -8,8 +8,16 @@
         <begin value="0"/>
         <end value="3600"/>
         <step-length value="0.1"/>
-
     </time>
+
+    <!-- Output Files for Performance Evaluation -->
+    <output>
+        <summary-output value="summary_simB.xml"/>
+        <statistic-output value="stats_simB.xml"/>
+        <fcd-output value="fcd_simB.xml"/>
+        <tripinfo-output value="tripinfo_simB.xml"/>
+    </output>
+
     <report>
         <no-step-log value="true"/>
     </report>

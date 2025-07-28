@@ -12,4 +12,17 @@
         <end value="3600"/>  <!-- End time (1 hour) -->
         <step-length value="0.1"/>
     </time>
+
+    <!-- Output Files for Performance Evaluation -->
+    <output>
+        <summary-output value="summary_simA.xml"/>
+        <statistic-output value="stats_simA.xml"/>
+        <fcd-output value="fcd_simA.xml"/>
+        <tripinfo-output value="tripinfo_simA.xml"/>
+    </output>
+
+    <!-- Report Settings -->
+    <report>
+        <no-step-log value="true"/>
+    </report>
 </configuration>
