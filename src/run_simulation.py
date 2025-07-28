@@ -2,7 +2,7 @@
 # Enhanced Digital Twin Urban Traffic Mirror with Realistic Vehicle Behavior
 # 
 # DESIGN PRINCIPLES:
-# 1. GPS vehicles (buses, taxis) use balanced GPS corrections to prevent lane jumping while maintaining responsiveness
+# 1. GPS vehicles (buses) use balanced GPS corrections to prevent lane jumping while maintaining responsiveness
 # 2. Non-GPS vehicles (cars, trucks) drive naturally via SUMO with minimal camera intervention
 # 3. Camera detection is used for spawning ALL vehicles when they enter camera range
 # 4. Camera updates are only applied to non-GPS vehicles at junctions/intersections to avoid glitching
@@ -468,7 +468,7 @@ def should_have_gps(vtype):
     Returns:
         bool: True if the vehicle should have GPS, False otherwise.
     """
-    gps_enabled_types = {'bus' , 'taxi'}
+    gps_enabled_types = {'bus'}
     return vtype in gps_enabled_types
 
 def get_noisy_gps_position(conn, vehicle_id, std_dev=2.5):
@@ -608,7 +608,7 @@ def hybrid_gps_mirroring(connA, connB, vehicle_id, gps_pos, current_speed, is_st
                 logger.warning(f"GPS correction for {vehicle_id} skipped due to collision risk")
                 position_intervention = "no_correction_collision_risk"
             else:
-                # Standard handling for ALL GPS vehicles (buses, taxis - treated identically)
+                # Standard handling for GPS vehicles (buses)
                 if current_mirror_speed > 15.0:  # Threshold for all GPS vehicles
                     position_intervention = "no_correction_fast_moving"
                     logger.debug(f"GPS: {vehicle_id} moving very fast ({current_mirror_speed:.1f} m/s), skipping correction to prevent issues.")
@@ -639,9 +639,9 @@ def hybrid_gps_mirroring(connA, connB, vehicle_id, gps_pos, current_speed, is_st
             
             # Double-check safety before applying correction - use adaptive safety based on GPS error
             if check_safe_position_update(connB, vehicle_id, corrected_x, corrected_y, gps_error):
-                # Use the SAME strategy for ALL GPS vehicles (buses and taxis)
+                # Use the SAME strategy for GPS vehicles (buses)
                 try:
-                    # ALL GPS vehicles use keepRoute=1 for consistent behavior
+                    # GPS vehicles use keepRoute=1 for consistent behavior
                     connB.vehicle.moveToXY(vehicle_id, edgeID=road_id, laneIndex=lane_index, 
                                          x=corrected_x, y=corrected_y, keepRoute=1)  # Same as buses
                     logger.debug(f"GPS correction applied to {vehicle_id}: factor={correction_factor:.2f}, lane={lane_index}")
@@ -836,8 +836,6 @@ def mirror_simulation(configA, configB, portA, portB, max_steps, step_length):
                         # Set consistent colors for all vehicle types to match Sim A
                         if veh_type == 'bus':
                             connB.vehicle.setColor(vid, (0, 255, 0, 255))  # Green for buses
-                        elif veh_type == 'taxi':
-                            connB.vehicle.setColor(vid, (255, 255, 0, 255))  # Yellow for taxis
                         elif veh_type == 'truck':
                             connB.vehicle.setColor(vid, (0, 0, 255, 255))  # Blue for trucks
                         elif veh_type == 'car':
@@ -983,8 +981,6 @@ def mirror_simulation(configA, configB, portA, portB, max_steps, step_length):
                             # Set vehicle colors to match Sim A
                             if veh_type == 'bus':
                                 connB.vehicle.setColor(vid, (0, 255, 0, 255))  # Green for buses
-                            elif veh_type == 'taxi':
-                                connB.vehicle.setColor(vid, (255, 255, 0, 255))  # Yellow for taxis
                             elif veh_type == 'truck':
                                 connB.vehicle.setColor(vid, (0, 0, 255, 255))  # Blue for trucks
                             elif veh_type == 'car':
