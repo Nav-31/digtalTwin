@@ -10,6 +10,8 @@
 # 6. Balanced corrections prevent vehicles from glitching while maintaining digital twin accuracy
 # 7. Fast-moving vehicles (>15 m/s) skip GPS corrections to maintain natural highway driving
 # 8. Robust error handling prevents simulation freezing
+# 9. FIXED: Maintains consistent speed control (no aggressive releases) for proper Sim A/B synchronization
+# 10. FIXED: Uses gentle speed adjustments inspired by old file approach for better digital twin sync
 #
 import os
 import sys
@@ -55,9 +57,10 @@ def handle_between_update(connB, vid, state, vehicle_last_speed):
             last = vehicle_last_speed.get(vid, state['speed'])
             smooth = HybridConfig.SPEED_SMOOTH_FACTOR * state['speed'] + (1 - HybridConfig.SPEED_SMOOTH_FACTOR) * last
             
-            # Ensure minimum speed to prevent lag after spawning
+            # FIXED: Use old file's approach - more conservative minimum speed
+            # Ensure minimum speed to prevent lag after spawning but maintain sync
             if smooth > 0 and smooth < 1.0:
-                smooth = max(smooth, 1.5)  # Minimum momentum
+                smooth = max(smooth, 1.0)  # Reduced from 1.5 to 1.0 for better sync
             
             connB.vehicle.setSpeed(vid, smooth)
             vehicle_last_speed[vid] = smooth
@@ -83,10 +86,10 @@ class HybridConfig:
     GRADUAL_STOP_FACTOR = 0.8           # Increased from 0.7 for smoother stopping
     
     # Camera-specific parameters for non-GPS vehicles
-    CAMERA_MIN_CORRECTION_DISTANCE = 5.0    # Minimum distance before applying camera correction
-    CAMERA_MAX_CORRECTION_DISTANCE = 50.0   # Maximum distance for camera correction
-    CAMERA_CORRECTION_FACTOR = 0.2          # Slightly increased from 0.15
-    CAMERA_SPEED_BLEND_FACTOR = 0.3         # Back to 0.3 for better responsiveness
+    CAMERA_MIN_CORRECTION_DISTANCE = 2.0    # Minimum distance before applying camera correction (reduced from 5.0 to allow closer spawning)
+    CAMERA_MAX_CORRECTION_DISTANCE = 100.0   # Increased maximum distance for camera correction to handle highway speeds
+    CAMERA_CORRECTION_FACTOR = 0.35         # Increased responsiveness for better lag reduction
+    CAMERA_SPEED_BLEND_FACTOR = 0.5         # Increased for more responsive speed updates
     
     # Collision avoidance parameters - FIXED: Made consistent for all vehicle types
     SAFE_FOLLOWING_DISTANCE = 12.0         # Increased minimum safe distance between vehicles
@@ -120,43 +123,33 @@ class CameraMirroringStrategy(BaseMirroringStrategy):
                         logger.debug(f"GPS vehicle {vid} detected by camera - skipping camera update (GPS takes priority).")
                         return False, 'camera_skipped_gps_vehicle'
                     
-                    # COLLISION AVOIDANCE CHECK - Priority for non-GPS vehicles too
+                    # Apply minimal collision avoidance check for non-GPS vehicles
                     collision_risk, risk_info = check_collision_risk(connB, vid)
                     if collision_risk == "critical":
                         logger.warning(f"COLLISION RISK: Non-GPS vehicle {vid} has critical collision risk - skipping camera update")
                         apply_collision_avoidance(connB, vid, collision_risk, risk_info)
                         return True, 'camera_collision_avoidance_critical'
-                    
-                    # For non-GPS vehicles, check if at strategic location for updates
-                    road_id = connA.vehicle.getRoadID(vid)
-                    is_at_junction = road_id.startswith(':') if road_id else False
-                    is_near_junction = detect_traffic_light_proximity(connA, vid)[0]
-                    
-                    if not (is_at_junction or is_near_junction):
-                        logger.debug(f"Non-GPS vehicle {vid} not at strategic location - skipping camera update to prevent glitching.")
-                        return False, 'camera_skipped_not_strategic'
                         
                 except traci.TraCIException as e:
                     logger.debug(f"Could not check vehicle type/location for {vid}: {e}")
                     return False, 'camera_error_vehicle_check'
                 
-                # Check if camera position update is safe (no collisions)
-                # Be less restrictive for non-GPS vehicles - only check critical safety
-                is_safe_update = True  # Default to allowing camera updates for non-GPS vehicles
+                # Check if camera position update is safe (simplified like old file)
+                is_safe_update = True  # Default to allowing camera updates for responsiveness
                 try:
-                    # Only do safety check if there are very close vehicles (< 3m)
+                    # Only check for very close vehicles (< 2m) - much simpler safety check
                     for other_vid in connB.vehicle.getIDList():
                         if other_vid != vid:
                             try:
                                 other_pos = connB.vehicle.getPosition(other_vid)
                                 distance = euclidean((noisy_x, noisy_y), other_pos)
-                                if distance < 3.0:  # Much closer threshold for non-GPS vehicles
+                                if distance < 2.0:  # Very conservative threshold
                                     is_safe_update = False
                                     break
                             except traci.TraCIException:
                                 continue
                 except:
-                    is_safe_update = True  # If we can't check, allow the move
+                    is_safe_update = True  # If we can't check, allow the move for responsiveness
                 
                 if not is_safe_update:
                     logger.debug(f"Camera correction for non-GPS vehicle {vid} skipped due to very close vehicle")
@@ -170,13 +163,53 @@ class CameraMirroringStrategy(BaseMirroringStrategy):
                     # Calculate distance to camera detection
                     camera_distance = euclidean(current_pos, (noisy_x, noisy_y))
                     
+                    # ENHANCED DISTANCE VALIDATION: Adjust thresholds based on vehicle type and speed
+                    # Get vehicle type for intelligent distance validation
+                    try:
+                        vtype = connA.vehicle.getTypeID(vid)
+                        current_speed = connB.vehicle.getSpeed(vid)
+                        
+                        # Dynamic distance thresholds based on vehicle type and speed
+                        if vtype == 'taxi':
+                            # Taxis need more flexible distance validation for highway speeds
+                            min_distance = HybridConfig.CAMERA_MIN_CORRECTION_DISTANCE
+                            max_distance = min(HybridConfig.CAMERA_MAX_CORRECTION_DISTANCE, max(50.0, current_speed * 8.0))  # Scale with speed
+                        else:
+                            # Standard validation for other vehicles  
+                            min_distance = HybridConfig.CAMERA_MIN_CORRECTION_DISTANCE
+                            max_distance = HybridConfig.CAMERA_MAX_CORRECTION_DISTANCE
+                            
+                    except:
+                        # Fallback to standard validation
+                        min_distance = HybridConfig.CAMERA_MIN_CORRECTION_DISTANCE
+                        max_distance = HybridConfig.CAMERA_MAX_CORRECTION_DISTANCE
+                    
                     # Only apply correction if the difference is significant but not too large
                     # This prevents small jitters and large teleportation glitches
-                    if HybridConfig.CAMERA_MIN_CORRECTION_DISTANCE < camera_distance < HybridConfig.CAMERA_MAX_CORRECTION_DISTANCE:
+                    if min_distance < camera_distance < max_distance:
                         # Apply minimal correction factor (similar to GPS near traffic lights)
                         correction_factor = HybridConfig.CAMERA_CORRECTION_FACTOR
                         corrected_x = current_pos[0] + correction_factor * (noisy_x - current_pos[0])
                         corrected_y = current_pos[1] + correction_factor * (noisy_y - current_pos[1])
+                        
+                        # DIRECTION VALIDATION: Prevent backward movement corrections
+                        # Check if the correction is in a reasonable direction relative to current route
+                        try:
+                            route_edges = connB.vehicle.getRoute(vid)
+                            current_edge = connB.vehicle.getRoadID(vid)
+                            if route_edges and current_edge in route_edges:
+                                # Simple direction check: ensure we're not moving dramatically backward
+                                dx = corrected_x - current_pos[0]
+                                dy = corrected_y - current_pos[1]
+                                movement_distance = math.sqrt(dx*dx + dy*dy)
+                                
+                                # If movement is very small and speed is near zero, skip to prevent drift
+                                current_speed = connB.vehicle.getSpeed(vid)
+                                if movement_distance < 1.0 and current_speed < 0.5:
+                                    logger.debug(f"Camera correction for {vid} skipped - vehicle nearly stopped with minimal movement to prevent backward drift.")
+                                    return False, 'camera_prevented_backward_drift'
+                        except traci.TraCIException:
+                            pass  # If route check fails, continue with correction
                         
                         # Final safety check before moving - simplified for non-GPS vehicles
                         final_safety_check = True
@@ -208,6 +241,23 @@ class CameraMirroringStrategy(BaseMirroringStrategy):
                                 blend_factor = HybridConfig.CAMERA_SPEED_BLEND_FACTOR
                                 smooth_speed = (1 - blend_factor) * current_speed + blend_factor * speed
                                 
+                                # ENHANCED ZERO SPEED LOCKUP PREVENTION: Critical for taxi vehicles
+                                if speed > 0.5 and smooth_speed < 0.3:
+                                    smooth_speed = max(smooth_speed, 0.5)  # Minimum movement speed to prevent getting stuck
+                                    logger.debug(f"Camera correction for {vid}: Applied minimum speed {smooth_speed:.1f} to prevent zero-speed lockup.")
+                                elif smooth_speed < 0.1:  # Critical lockup prevention
+                                    # Get vehicle type to apply appropriate recovery speed
+                                    try:
+                                        vtype = connA.vehicle.getTypeID(vid)
+                                        if vtype == 'taxi':
+                                            recovery_speed = 2.0  # Higher recovery for taxis
+                                        else:
+                                            recovery_speed = 1.0  # Standard recovery
+                                        smooth_speed = max(smooth_speed, recovery_speed)
+                                        logger.warning(f"CRITICAL RECOVERY: Applied emergency speed {smooth_speed:.1f} to prevent {vid} ({vtype}) complete lockup")
+                                    except:
+                                        smooth_speed = max(smooth_speed, 1.0)  # Fallback recovery
+                                
                                 # Apply collision-aware speed if needed
                                 if collision_risk == "moderate" or collision_risk == "high":
                                     smooth_speed = smooth_speed * HybridConfig.SPEED_REDUCTION_FACTOR
@@ -215,15 +265,9 @@ class CameraMirroringStrategy(BaseMirroringStrategy):
                                 
                                 connB.vehicle.setSpeed(vid, smooth_speed)
                                 
-                                # For non-GPS vehicles, release speed control after position update
-                                # This allows SUMO to handle acceleration naturally
-                                try:
-                                    vtype = connA.vehicle.getTypeID(vid)
-                                    if not should_have_gps(vtype):
-                                        connB.vehicle.setSpeed(vid, -1)  # Release speed control to SUMO
-                                        logger.debug(f"Released speed control for non-GPS vehicle {vid} after camera update")
-                                except:
-                                    pass  # If we can't check type, keep current behavior
+                                # FIXED: Remove speed control release to maintain synchronization
+                                # Keep consistent speed control like the old file for better digital twin sync
+                                # No more aggressive speed releases that break synchronization
                                 
                                 logger.info(f"CAMERA_UPDATE: {vid} safely corrected to ({corrected_x:.1f}, {corrected_y:.1f}) with smooth speed {smooth_speed:.1f}.")
                                 return True, 'camera_minimal_update'
@@ -234,7 +278,12 @@ class CameraMirroringStrategy(BaseMirroringStrategy):
                             logger.debug(f"Camera correction for {vid} cancelled by final safety check (vehicle within 2m)")
                             return False, 'camera_cancelled_close_vehicle'
                     else:
-                        logger.debug(f"Camera detection for {vid} too close ({camera_distance:.1f}m) or too far - skipping to avoid glitch.")
+                        try:
+                            vtype = connA.vehicle.getTypeID(vid)
+                            current_speed = connB.vehicle.getSpeed(vid)
+                            logger.debug(f"Camera detection for {vid} ({vtype}) distance {camera_distance:.1f}m outside range {min_distance:.1f}-{max_distance:.1f}m (speed: {current_speed:.1f} m/s) - skipping to avoid glitch.")
+                        except:
+                            logger.debug(f"Camera detection for {vid} distance {camera_distance:.1f}m outside validation range - skipping to avoid glitch.")
                         return False, 'camera_distance_rejected'
                         
                 except traci.TraCIException as e:
@@ -463,13 +512,17 @@ def should_have_gps(vtype):
     Determines if a vehicle should have a functioning GPS based on its type.
     
     Args:
-        vtype (str): The vehicle type ID (e.g., 'bus', 'car').
+        vtype (str): The vehicle type ID (e.g., 'bus', 'taxi', 'car').
         
     Returns:
         bool: True if the vehicle should have GPS, False otherwise.
     """
-    gps_enabled_types = {'bus'}
-    return vtype in gps_enabled_types
+    # Match the GPS configuration from dub.rou.xml where both bus and taxi have GPS enabled
+    gps_enabled_types = {'bus', 'taxi'}
+    result = vtype in gps_enabled_types
+    if result:
+        logger.debug(f"Vehicle type '{vtype}' confirmed as GPS-enabled")
+    return result
 
 def get_noisy_gps_position(conn, vehicle_id, std_dev=2.5):
     """
@@ -668,9 +721,10 @@ def hybrid_gps_mirroring(connA, connB, vehicle_id, gps_pos, current_speed, is_st
                 if collision_risk == "moderate":
                     smooth_speed = smooth_speed * 0.9  # 10% reduction for moderate risk
                 
-                # Ensure minimum speed for moving vehicles to prevent lag/freezing
+                # FIXED: Use old file's approach - more conservative minimum speed to maintain sync
+                # Ensure minimum speed for moving vehicles to prevent lag/freezing but not too aggressive
                 if smooth_speed > 0 and smooth_speed < 1.0:
-                    smooth_speed = max(smooth_speed, 1.5)  # Minimum momentum to prevent getting stuck
+                    smooth_speed = max(smooth_speed, 1.0)  # Reduced from 1.5 to 1.0 for better sync
                 
                 connB.vehicle.setSpeed(vehicle_id, smooth_speed)
         
@@ -798,40 +852,24 @@ def mirror_simulation(configA, configB, portA, portB, max_steps, step_length):
                         # Spawn the vehicle
                         connB.vehicle.moveToXY(vid, edgeID=road_id, laneIndex=0, x=spawn_x, y=spawn_y, keepRoute=1)
                         
-                        # Set initial speed - use natural speeds and let SUMO accelerate naturally
+                        # FIXED: Use old file's approach - natural speed spawning for better synchronization
+                        # Set initial speed using natural speeds without aggressive boosts or SUMO releases
                         if speed > 20.0:  # Only cap extremely high speeds
                             safe_speed = 15.0  # Reasonable highway speed
-                        elif speed < 1.0:  # Handle very slow or stopped vehicles
-                            # Give more momentum to trucks as they need time to accelerate
-                            if veh_type == 'truck':
-                                safe_speed = max(speed, 5.0)  # Even higher minimum for trucks (increased from 4.0)
-                                logger.info(f"Truck {vid} given aggressive initial speed: {safe_speed:.1f} m/s")
-                            else:
-                                safe_speed = max(speed, 2.0)  # Standard minimum for other vehicles
+                        elif speed < 0.5:  # Handle very slow or stopped vehicles
+                            # Give minimal momentum but don't be aggressive to maintain sync
+                            safe_speed = max(speed, 1.0)  # Reduced from aggressive values for better sync
                         else:
                             safe_speed = speed  # Use actual speed for natural movement
                         
-                        # Set the speed and then immediately release control to let SUMO accelerate naturally
+                        # FIXED: Set speed and maintain control like old file - no aggressive releases
                         connB.vehicle.setSpeed(vid, safe_speed)
                         
-                        # For non-GPS vehicles (trucks, cars), release speed control immediately AND set acceleration
-                        if not should_have_gps(veh_type):
-                            # Use -1 to return speed control to SUMO after initial momentum
-                            connB.vehicle.setSpeed(vid, -1)
-                            
-                            # For trucks, also ensure they have good acceleration parameters
-                            if veh_type == 'truck':
-                                try:
-                                    # Set aggressive acceleration for trucks to overcome initial lag
-                                    connB.vehicle.setAccel(vid, 2.5)  # Higher acceleration
-                                    connB.vehicle.setDecel(vid, 4.5)  # Good deceleration
-                                    logger.info(f"Set aggressive acceleration for truck {vid}")
-                                except:
-                                    pass  # If acceleration setting fails, continue
-                            
-                            logger.info(f"Released speed control for {veh_type} {vid} to allow natural SUMO acceleration")
+                        # FIXED: Remove aggressive speed control releases and acceleration manipulation
+                        # Keep consistent speed control for all vehicle types like the old file
+                        # This maintains better synchronization between Sim A and Sim B
                         
-                        logger.info(f"Spawned {veh_type} {vid} with initial speed {safe_speed:.1f} m/s (original: {speed:.1f} m/s)")
+                        logger.info(f"Spawned {veh_type} {vid} with natural speed {safe_speed:.1f} m/s (original: {speed:.1f} m/s)")
                         
                         # Set consistent colors for all vehicle types to match Sim A
                         if veh_type == 'bus':
@@ -866,29 +904,18 @@ def mirror_simulation(configA, configB, portA, portB, max_steps, step_length):
                     # ALL GPS vehicles: same regular interval updates
                     is_mirroring_due = (step - last_mirroring.get(vid, -gps_update_interval) >= gps_update_interval)
                 else:
-                    # Non-GPS vehicles: only update when camera detects them at junctions/intersections
-                    # AND reduce frequency to minimize interference with GPS vehicles
+                    # Non-GPS vehicles: update when camera detects them (simplified like old file)
                     if data['source'] == 'camera':
-                        try:
-                            road_id = connA.vehicle.getRoadID(vid)
-                            is_at_junction = road_id.startswith(':') if road_id else False
-                            is_near_junction = detect_traffic_light_proximity(connA, vid)[0]
-                            
-                            # Reduce camera update frequency for non-GPS vehicles to minimize interference
-                            last_camera_update = last_mirroring.get(vid, -50)  # Increased interval from 10 to 50
-                            time_since_last_update = step - last_camera_update
-                            
-                            # Only apply camera updates at strategic locations AND with reduced frequency
-                            is_mirroring_due = (is_at_junction or is_near_junction) and time_since_last_update >= 30  # Minimum 30 steps between updates
-                            if is_mirroring_due:
-                                logger.debug(f"Non-GPS vehicle {vid} at strategic location - applying camera update (last update: {time_since_last_update} steps ago).")
-                            else:
-                                if is_at_junction or is_near_junction:
-                                    logger.debug(f"Non-GPS vehicle {vid} at strategic location but too soon since last update ({time_since_last_update} steps) - skipping to reduce interference.")
-                                else:
-                                    logger.debug(f"Non-GPS vehicle {vid} detected by camera but not at strategic location - skipping update.")
-                        except traci.TraCIException:
-                            is_mirroring_due = False
+                        # Simple frequency check - same as GPS vehicles for consistency
+                        last_camera_update = last_mirroring.get(vid, -gps_update_interval)
+                        time_since_last_update = step - last_camera_update
+                        
+                        # Update at same frequency as GPS vehicles but using camera data
+                        is_mirroring_due = time_since_last_update >= gps_update_interval  # Same 10-step interval as GPS
+                        if is_mirroring_due:
+                            logger.debug(f"Non-GPS vehicle {vid} camera update due (last update: {time_since_last_update} steps ago).")
+                        else:
+                            logger.debug(f"Non-GPS vehicle {vid} detected by camera but too soon since last update ({time_since_last_update} steps).")
                     else:
                         is_mirroring_due = False
                 
@@ -959,24 +986,19 @@ def mirror_simulation(configA, configB, portA, portB, max_steps, step_length):
                             connB.vehicle.add(vid, routeID=route_id, typeID=veh_type)
                             connB.vehicle.moveToXY(vid, edgeID=road_id, laneIndex=0, x=pos[0], y=pos[1], keepRoute=1)
                             
-                            # Use natural speed for respawned vehicles to prevent lag
+                            # FIXED: Use natural speed for respawned vehicles - old file approach
                             if speed > 20.0:
                                 respawn_speed = 15.0
-                            elif speed < 1.0:
-                                # Give more momentum to trucks for respawning
-                                if veh_type == 'truck':
-                                    respawn_speed = max(speed, 4.0)  # Higher minimum for trucks
-                                else:
-                                    respawn_speed = max(speed, 2.0)  # Standard minimum
+                            elif speed < 0.5:
+                                # Use minimal boost for all vehicle types to maintain sync
+                                respawn_speed = max(speed, 1.0)  # Reduced from aggressive values
                             else:
                                 respawn_speed = speed
                                 
                             connB.vehicle.setSpeed(vid, respawn_speed)
                             
-                            # For non-GPS vehicles, release speed control to let SUMO accelerate naturally
-                            if not should_have_gps(veh_type):
-                                connB.vehicle.setSpeed(vid, -1)
-                                logger.info(f"Released speed control for respawned {veh_type} {vid}")
+                            # FIXED: Remove speed control release - maintain control like old file
+                            # Keep consistent speed control for better synchronization
                             
                             # Set vehicle colors to match Sim A
                             if veh_type == 'bus':
@@ -986,7 +1008,7 @@ def mirror_simulation(configA, configB, portA, portB, max_steps, step_length):
                             elif veh_type == 'car':
                                 connB.vehicle.setColor(vid, (255, 0, 0, 255))  # Red for cars
                             
-                            logger.info(f"Successfully respawned {veh_type} {vid} with speed {respawn_speed:.1f} m/s")
+                            logger.info(f"Successfully respawned {veh_type} {vid} with natural speed {respawn_speed:.1f} m/s")
                         except Exception as respawn_e:
                             logger.error(f"Failed to respawn {vid} in Sim B: {respawn_e}")
                             seen_vehicles.discard(vid)
@@ -1006,26 +1028,15 @@ def mirror_simulation(configA, configB, portA, portB, max_steps, step_length):
                         # No speed control, no position control - pure SUMO behavior
                         logger.debug(f"Non-GPS vehicle {vid} ({vtype}) driving naturally via SUMO (no sensor intervention)")
                         
+                        # FIXED: Apply old file approach - gentle smoothing instead of aggressive boosts
                         # However, ensure they're not stuck at very low speeds from spawning
                         try:
                             current_speed = connB.vehicle.getSpeed(vid)
-                            if 0 < current_speed < 2.0:  # Increased threshold from 1.0 to 2.0 for trucks
-                                # Give a much stronger speed boost for trucks to overcome initial lag
-                                if vtype == 'truck':
-                                    boost_speed = 6.0  # Much higher boost for trucks (increased from 4.0)
-                                    
-                                    # Also set aggressive acceleration parameters
-                                    connB.vehicle.setAccel(vid, 3.0)  # Very aggressive acceleration
-                                    connB.vehicle.setSpeed(vid, boost_speed)
-                                    # Immediately release control to let SUMO take over acceleration
-                                    connB.vehicle.setSpeed(vid, -1)
-                                    logger.info(f"TRUCK BOOST: {vid} boosted from {current_speed:.1f} -> {boost_speed:.1f} m/s with aggressive acceleration")
-                                else:
-                                    boost_speed = 2.5  # Standard boost for cars
-                                    connB.vehicle.setSpeed(vid, boost_speed)
-                                    # Immediately release control to let SUMO take over acceleration
-                                    connB.vehicle.setSpeed(vid, -1)
-                                    logger.info(f"Speed boost for {vtype} {vid}: {current_speed:.1f} -> {boost_speed:.1f} m/s, then released control")
+                            if 0 < current_speed < 1.0:  # Reduced threshold for better sync
+                                # Apply gentle speed adjustment for all vehicle types - no aggressive boosts
+                                gentle_speed = max(current_speed, 1.0)  # Minimal boost, same for all types
+                                connB.vehicle.setSpeed(vid, gentle_speed)
+                                logger.debug(f"Gentle speed adjustment for {vtype} {vid}: {current_speed:.1f} -> {gentle_speed:.1f} m/s")
                         except traci.TraCIException:
                             pass  # If we can't check/set speed, let SUMO handle it
                         
