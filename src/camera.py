@@ -9,8 +9,8 @@ logger = logging.getLogger(__name__)
 
 # --- CAMERAS and file setup are unchanged ---
 CAMERAS = {
-    "cctv_main": { "x": 1364.05, "y": 887.61, "range": 200 },
-    # "cctv_top1": { "x": 2093.4, "y": 1409.50, "range": 20 },
+    "cctv_main1": { "x": 1364.05, "y": 887.61, "range": 200 },
+    "cctv_main2": { "x":1479.90 , "y": 53.306543, "range": 200 },
      "cctv_truck": { "x": 1518.77, "y": 984.10, "range": 200 },
      "cctv_car": { "x": 1706.03, "y": 667.48, "range": 200 }
 }

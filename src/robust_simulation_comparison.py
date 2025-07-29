@@ -398,12 +398,12 @@ def create_comparison_plot(timesteps: List[float], counts_a: List[int], counts_b
     # Create the plot
     plt.figure(figsize=(12, 8))
     
-    plt.plot(sampled_timesteps, sampled_counts_a, 'b-', linewidth=2, label='Simulation A', alpha=0.8)
-    plt.plot(sampled_timesteps, sampled_counts_b, 'r-', linewidth=2, label='Simulation B', alpha=0.8)
+    plt.plot(sampled_timesteps, sampled_counts_a, 'b-', linewidth=2, label='Real World', alpha=0.8)
+    plt.plot(sampled_timesteps, sampled_counts_b, 'r-', linewidth=2, label='Digital Twin', alpha=0.8)
     
     plt.xlabel('Time (seconds)', fontsize=12)
     plt.ylabel('Number of Vehicles', fontsize=12)
-    plt.title('Vehicle Count Comparison: Simulation A vs Simulation B', fontsize=14, fontweight='bold')
+    plt.title('Vehicle Count Comparison: Real World vs Digital Twin', fontsize=14, fontweight='bold')
     plt.legend(fontsize=11)
     plt.grid(True, alpha=0.3)
     
@@ -449,7 +449,7 @@ def create_speed_comparison_plot(timesteps: List[float], speeds_a: List[float], 
     
     plt.xlabel('Time (seconds)', fontsize=12)
     plt.ylabel('Mean Speed (m/s)', fontsize=12)
-    plt.title('Mean Speed Comparison: Simulation A vs Simulation B', fontsize=14, fontweight='bold')
+    plt.title('Mean Speed Comparison: Real World vs Digital Twin', fontsize=14, fontweight='bold')
     plt.legend(fontsize=11)
     plt.grid(True, alpha=0.3)
     
@@ -498,7 +498,7 @@ def create_collision_plot(timesteps: List[float], collisions: List[int],
     
     plt.xlabel('Time (seconds)', fontsize=12)
     plt.ylabel('Number of Collisions', fontsize=12)
-    plt.title('Collision Monitoring: Simulation B', fontsize=14, fontweight='bold')
+    plt.title('Collision Monitoring: Digital Twin', fontsize=14, fontweight='bold')
     plt.grid(True, alpha=0.3)
     
     # Add statistics and interpretation
@@ -510,8 +510,8 @@ def create_collision_plot(timesteps: List[float], collisions: List[int],
     from matplotlib.patches import Patch
     legend_elements = [
         Patch(facecolor='green', label='No Collisions (Good)'),
-        Patch(facecolor='orange', label='1-2 Collisions (Warning)'),
-        Patch(facecolor='red', label='3+ Collisions (Critical)')
+        Patch(facecolor='orange', label='<10 Collisions (Warning)'),
+        Patch(facecolor='red', label='10+ Collisions (Critical)')
     ]
     plt.legend(handles=legend_elements, loc='upper right')
     
@@ -519,7 +519,7 @@ def create_collision_plot(timesteps: List[float], collisions: List[int],
     if total_collisions == 0:
         status = "✅ EXCELLENT: No collisions detected"
         status_color = "green"
-    elif total_collisions <= 5:
+    elif total_collisions <= 10:
         status = "⚠️ WARNING: Few collisions detected"
         status_color = "orange"
     else:
