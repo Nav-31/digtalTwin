@@ -61,3 +61,6 @@ MAIN HIGHWAY
 
 #running run_simulation
 python .\run_simulation.py --configA dub.sumocfg.xml --configB simB.sumocfg.xml --portA 8813 --portB 8814 --steps 10000 --interval 0.1 --verbose
+
+
+python ./run_simulation.py --configA dub.sumocfg.xml --configB simB.sumocfg.xml --portA 8813 --portB 8814 --steps 10000 --interval 0.1 --verbose
