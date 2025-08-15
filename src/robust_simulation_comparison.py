@@ -515,20 +515,20 @@ def create_collision_plot(timesteps: List[float], collisions: List[int],
     ]
     plt.legend(handles=legend_elements, loc='upper right')
     
-    # Add interpretation text
-    if total_collisions == 0:
-        status = "✅ EXCELLENT: No collisions detected"
-        status_color = "green"
-    elif total_collisions <= 10:
-        status = "⚠️ WARNING: Few collisions detected"
-        status_color = "orange"
-    else:
-        status = "❌ CRITICAL: Many collisions detected"
-        status_color = "red"
+    # # Add interpretation text
+    # if total_collisions == 0:
+    #     status = "✅ EXCELLENT: No collisions detected"
+    #     status_color = "green"
+    # elif total_collisions <= 10:
+    #     status = "⚠️ WARNING: Few collisions detected"
+    #     status_color = "orange"
+    # else:
+    #     status = "❌ CRITICAL: Many collisions detected"
+    #     status_color = "red"
     
-    stats_text = f'Total Collisions: {total_collisions}\nMax per step: {max_collisions}\nTimesteps with collisions: {collision_timesteps}\n\n{status}'
-    plt.text(0.02, 0.98, stats_text, transform=plt.gca().transAxes, 
-             verticalalignment='top', bbox=dict(boxstyle='round', facecolor=status_color, alpha=0.2))
+    # stats_text = f'Total Collisions: {total_collisions}\nMax per step: {max_collisions}\nTimesteps with collisions: {collision_timesteps}\n\n{status}'
+    # plt.text(0.02, 0.98, stats_text, transform=plt.gca().transAxes, 
+    #          verticalalignment='top', bbox=dict(boxstyle='round', facecolor=status_color, alpha=0.2))
     
     # Set y-axis to start from 0 and add some padding
     plt.ylim(bottom=0, top=max(max_collisions + 1, 1))
