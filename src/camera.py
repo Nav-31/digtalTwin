@@ -7,7 +7,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# --- CAMERAS and file setup are unchanged ---
+
 CAMERAS = {
     "cctv_main1": { "x": 1364.05, "y": 887.61, "range": 200 },
     "cctv_main2": { "x":1479.90 , "y": 53.306543, "range": 200 },
@@ -42,9 +42,7 @@ def update_virtual_cameras(step, conn):
                     
                     speed = conn.vehicle.getSpeed(vid)
                     
-                    # --- MODIFIED SENSOR LOGIC ---
                     # Simulate position error by adding Gaussian noise to the true coordinates.
-                    # This is a more realistic model of camera position detection.
                     position_noise_std_dev = 2.0  # meters
                     noisy_x = vx + random.gauss(0, position_noise_std_dev)
                     noisy_y = vy + random.gauss(0, position_noise_std_dev)
@@ -59,7 +57,7 @@ def update_virtual_cameras(step, conn):
                             round(noisy_x, 2), round(noisy_y, 2)
                         ])
                         
-                    # update in-memory cache with new format
+                    # update in-memory cache
                     CAMERA_CACHE[vid] = (
                         step, cam_id, round(noisy_speed, 2), 
                         noisy_x, noisy_y

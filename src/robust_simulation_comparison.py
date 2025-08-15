@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""
-Robust Simulation Comparison Script
-Compares vehicle counts (excluding pedestrians) between Simulation A and Simulation B from FCD XML files.
-Handles incomplete/malformed XML entries gracefully.
-"""
+
 
 import re
 import logging
@@ -84,7 +80,6 @@ class RobustFCDParser:
     def parse_fcd_file(self, file_path: str) -> Dict[float, int]:
         """
         Parse FCD XML file and return timestep -> vehicle count mapping.
-        Handles malformed XML gracefully.
         """
         logger.info(f"Parsing FCD file: {file_path}")
         
@@ -221,7 +216,6 @@ class RobustSummaryParser:
     def parse_collision_data(self, file_path: str) -> Dict[float, int]:
         """
         Parse Summary XML file and return timestep -> collision count mapping.
-        Handles malformed XML gracefully.
         """
         logger.info(f"Parsing collision data from: {file_path}")
         
@@ -264,16 +258,15 @@ class RobustSummaryParser:
         logger.info(f"Successfully parsed {valid_steps} steps for collision data")
         logger.info(f"Total collisions detected: {total_collisions}")
         if total_collisions > 0:
-            logger.warning(f"⚠️  COLLISIONS DETECTED: {total_collisions} collisions found in simulation!")
+            logger.warning(f"COLLISIONS DETECTED: {total_collisions} collisions found in simulation!")
         else:
-            logger.info("✅ No collisions detected - simulation running cleanly")
+            logger.info("No collisions detected - simulation running cleanly")
         
         return timestep_collisions
     
     def parse_summary_file(self, file_path: str) -> Dict[float, float]:
         """
         Parse Summary XML file and return timestep -> mean speed mapping.
-        Handles malformed XML gracefully.
         """
         logger.info(f"Parsing summary file: {file_path}")
         
@@ -466,8 +459,6 @@ def create_speed_comparison_plot(timesteps: List[float], speeds_a: List[float], 
     plt.tight_layout()
     plt.savefig(output_file, dpi=300, bbox_inches='tight')
     logger.info(f"Speed comparison plot saved as: {output_file}")
-    
-    # Print summary statistics
     logger.info(f"Simulation A Speed - Average: {avg_a:.2f} m/s, Max: {max_a:.2f} m/s, Min: {min(sampled_speeds_a) if sampled_speeds_a else 0:.2f} m/s")
     logger.info(f"Simulation B Speed - Average: {avg_b:.2f} m/s, Max: {max_b:.2f} m/s, Min: {min(sampled_speeds_b) if sampled_speeds_b else 0:.2f} m/s")
 
@@ -476,7 +467,6 @@ def create_collision_plot(timesteps: List[float], collisions: List[int],
                          step_interval: int = 100):
     """
     Create a plot monitoring collision count over time for SimB.
-    This plot helps identify simulation quality issues.
     """
     if not timesteps:
         logger.error("No collision data to plot")
@@ -514,22 +504,6 @@ def create_collision_plot(timesteps: List[float], collisions: List[int],
         Patch(facecolor='red', label='10+ Collisions (Critical)')
     ]
     plt.legend(handles=legend_elements, loc='upper right')
-    
-    # # Add interpretation text
-    # if total_collisions == 0:
-    #     status = "✅ EXCELLENT: No collisions detected"
-    #     status_color = "green"
-    # elif total_collisions <= 10:
-    #     status = "⚠️ WARNING: Few collisions detected"
-    #     status_color = "orange"
-    # else:
-    #     status = "❌ CRITICAL: Many collisions detected"
-    #     status_color = "red"
-    
-    # stats_text = f'Total Collisions: {total_collisions}\nMax per step: {max_collisions}\nTimesteps with collisions: {collision_timesteps}\n\n{status}'
-    # plt.text(0.02, 0.98, stats_text, transform=plt.gca().transAxes, 
-    #          verticalalignment='top', bbox=dict(boxstyle='round', facecolor=status_color, alpha=0.2))
-    
     # Set y-axis to start from 0 and add some padding
     plt.ylim(bottom=0, top=max(max_collisions + 1, 1))
     
@@ -573,7 +547,6 @@ def main():
     # Parse collision data for SimB (for quality monitoring)
     sim_b_collisions = summary_parser.parse_collision_data(sim_b_summary_file)
     
-    # Check if we have valid data
     if not sim_a_data and not sim_b_data:
         logger.error("No valid FCD data found in either simulation file")
     elif not sim_a_data:
@@ -593,7 +566,6 @@ def main():
         timesteps, counts_a, counts_b = align_timesteps(sim_a_data, sim_b_data)
         
         if timesteps:
-            # Create plot with sampling every 50 timesteps (adjustable)
             create_comparison_plot(timesteps, counts_a, counts_b, step_interval=50)
         else:
             logger.error("No common timesteps found between simulations for vehicle counts")
@@ -613,7 +585,7 @@ def main():
         collision_timesteps = sorted(sim_b_collisions.keys())
         collision_counts = [sim_b_collisions[t] for t in collision_timesteps]
         
-        # Create collision monitoring plot with sampling every 50 timesteps (adjustable)
+        # Create collision monitoring plot with sampling every 50 timesteps
         create_collision_plot(collision_timesteps, collision_counts, step_interval=50)
     else:
         logger.warning("No collision data found for Simulation B")
